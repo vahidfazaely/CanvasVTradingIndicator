@@ -1,8 +1,9 @@
 //@version=5
 //+------------------------------------------------------------------+
-//|  MyBuySellIndicator - TradingView (Pine Script v5)               |
+//|  CanvasV MTF Signal - TradingView (Pine Script v5)               |
 //|  Multi-timeframe version of the MT5 Phase 2 logic               |
 //|  v2.0.1 - hardening release (validation + repaint proof)        |
+//|  v2.0.2 - renamed to CanvasV MTF Signal (display name only)      |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend filter : H4 EMA 50/200 + EMA 50 slope (closed H4 only)  |
@@ -26,10 +27,10 @@
 //|   additionally gated by barstate.isconfirmed, so a forming      |
 //|   value can never reach a signal - no lookahead, no repaint.    |
 //+------------------------------------------------------------------+
-indicator("My Buy/Sell Scalper - MTF", shorttitle = "MyBS MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
+indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v2.0.1"
+VERSION = "v2.0.2"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -416,10 +417,10 @@ if enableAlerts and sellSig
           alert.freq_once_per_bar_close)
 
 //--- Classic alert conditions (usable from the Alerts dialog)
-alertcondition(strongBuy,                  title = "MyBS STRONG BUY",  message = "MyBS STRONG BUY signal")
-alertcondition(buySig and not strongBuy,   title = "MyBS BUY",         message = "MyBS BUY signal")
-alertcondition(strongSell,                 title = "MyBS STRONG SELL", message = "MyBS STRONG SELL signal")
-alertcondition(sellSig and not strongSell, title = "MyBS SELL",        message = "MyBS SELL signal")
+alertcondition(strongBuy,                  title = "CanvasV STRONG BUY",  message = "CanvasV STRONG BUY signal")
+alertcondition(buySig and not strongBuy,   title = "CanvasV BUY",         message = "CanvasV BUY signal")
+alertcondition(strongSell,                 title = "CanvasV STRONG SELL", message = "CanvasV STRONG SELL signal")
+alertcondition(sellSig and not strongSell, title = "CanvasV SELL",        message = "CanvasV SELL signal")
 
 //--------------------------------------------------------------
 // Info panel (upper-right)
@@ -453,7 +454,7 @@ if showPanel
         pan := table.new(position.top_right, 2, 18, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Title
-    table.cell(pan, 0, 0, "MY INDICATOR " + VERSION, text_color = color.white,  text_size = size.small)
+    table.cell(pan, 0, 0, "CANVASV MTF SIGNAL " + VERSION, text_color = color.white,  text_size = size.small)
     table.cell(pan, 1, 0, "",                          text_color = color.white,  text_size = size.small)
     //--- Symbol / Timeframe
     table.cell(pan, 0, 1, "Symbol",     text_color = color.silver, text_size = size.small)

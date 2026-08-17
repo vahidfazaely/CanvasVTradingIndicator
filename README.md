@@ -1,4 +1,4 @@
-# MyBuySellIndicator
+# CanvasV MTF Signal
 
 A multi-timeframe **H4 Trend + EMA Crossover** buy/sell indicator, with two implementations maintained side by side:
 
@@ -96,6 +96,6 @@ See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
 
 ## Development status
 
-- **TradingView:** multi-timeframe baseline `v2.0.1` (hardening release: HTF confirmation audit, config validation, na-safe level redraw) — working and compiling in the Pine Editor.
+- **TradingView:** multi-timeframe baseline `v2.0.2` (hardening + renamed to CanvasV MTF Signal) — working and compiling in the Pine Editor.
 - **MT5:** Phase 2 `v2.00` — working on M15 charts.
 - **Next milestone:** a Pine `strategy()` backtest version (planned, not yet implemented).

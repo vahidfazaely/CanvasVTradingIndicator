@@ -1,4 +1,4 @@
-# Testing — MyBuySellIndicator (TradingView)
+# Testing — CanvasV MTF Signal (TradingView)
 
 How we verify the indicator behaves correctly in TradingView.
 

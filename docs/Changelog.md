@@ -1,6 +1,15 @@
 # Changelog
 
-All notable changes to MyBuySellIndicator.
+All notable changes to CanvasV MTF Signal.
+
+## v2.0.2 — Renamed to CanvasV MTF Signal
+
+Date: 2026-08-17
+
+- Renamed the TradingView indicator's public/display name from "My Buy/Sell Scalper - MTF" to **CanvasV MTF Signal**.
+- Updated: `indicator()` title and shorttitle, the on-chart info panel title, the four `alertcondition` titles/messages, and the script header comment.
+- Renamed README, `docs/Strategy.md`, and `docs/Testing.md` headings.
+- **No logic, architecture, or hardening changes.** File paths unchanged (`TradingView/MyBuySellIndicator.pine`, `MT5/MyBuySellIndicator.mq5`) — repository/file renaming is handled in a separate phase. MT5 code untouched (its on-chart name still shows the old title until the MT5 naming phase).
 
 ## v2.0.1 (hardening) — TradingView MTF confirmation + repaint safety
 

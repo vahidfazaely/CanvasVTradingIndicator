@@ -1,4 +1,4 @@
-# Strategy — MyBuySellIndicator
+# Strategy — CanvasV MTF Signal
 
 This document describes the **current baseline** (TradingView `v2.0.1` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
 
