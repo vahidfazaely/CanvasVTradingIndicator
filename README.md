@@ -27,14 +27,14 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 
 ## TradingView version
 
-- **Fixed three-layer architecture:** **4H** = market trend (EMA 50/200 + slope), **1H** = intermediate confirmation (EMA 21/50), **15M** = entry trigger (EMA 9/21 cross + ADX + ATR).
-- **Signals fire ONLY on the 15M chart** — one consistent strategy, no per-timeframe variants. On **1H** the indicator shows the confirmation/context view; on **4H** the trend/context view; on **every other timeframe** (1m/3m/5m/30m/2H/6H/12H/D/W…) BUY/SELL signals are **actually disabled** (not just hidden) and the panel shows `ENTRY SIGNALS DISABLED - M15 ONLY`.
+- **Three-layer architecture:** **4H** = market trend (EMA 50/200 + slope), **1H** = intermediate confirmation (EMA 21/50), **entry** = EMA 9/21 cross + ADX + ATR on the chart.
+- **Signal engine is a 3-timeframe system — 15m / 1H / 4H only.** On **15m**, **1H**, and **4H** charts the engine is enabled and BUY/SELL signals fire (on 4H the trend uses the chart series, confirmed at candle close). On **every other timeframe** (1m/3m/5m/30m/2H/6H/12H/1D/1W/custom) the engine is gated off by `isSupportedSignalTF`: **no signals, no markers, no Entry/SL/TP levels, no score labels, no alerts** — display/context only. The panel shows `SIGNALS DISABLED` and the reason `Use 15m / 1H / 4H` (red).
 - **4H trend** is fetched with four single-line `request.security(..., "240", lookahead = barmerge.lookahead_off)` calls — one per value, each guaranteed to hold the **last completed 4H candle** (step-constant during the forming 4H candle; signals only ever see confirmed 4H values). No repaint, no lookahead.
 - **1H confirmation** uses the same methodology on `"60"`. On the 4H chart itself the trend is computed on the chart series (self mode, confirmed at close); on the 1H chart the confirmation uses the chart series. All signals fire only on **confirmed closed candles** (`barstate.isconfirmed`).
 - **Configurable scoring weights** with a default equivalent to the original 100-point model (25/25/25/25, minimum 75), plus optional **STRONG BUY / STRONG SELL** (threshold 100).
 - **Optional quality filters** (all off by default): EMA separation %, price vs EMA 21, H4 momentum, ATR volatility regime, volume confirmation.
 - **Config validation:** EMA periods must satisfy Fast < Slow, not all weights can be zero, and the minimum score cannot exceed the maximum achievable score — otherwise signals are suppressed and the panel shows `CONFIG ERROR` with the reason.
-- **Signal Audit Mode** (default off): a debug-only diagnostic table (15M charts only) showing the exact values and conditions that produced the latest confirmed signal — 4H trend/slope, 1H confirmation, 15M entry trigger, ADX, score breakdown, ATR levels, and signal bar. Presentation only; when off the chart is unchanged.
+- **Signal Audit Mode** (default off): a debug-only diagnostic table that first reports the timeframe policy — `SIGNAL TF` (15M/1H/4H or the chart TF) and `SIGNAL MODE` (`ENABLED` / `DISABLED`, with the reason `Use 15m / 1H / 4H` on unsupported charts). On supported timeframes it additionally shows the exact values and conditions that produced the latest confirmed signal — 4H trend/slope, 1H confirmation, entry trigger, ADX, score breakdown, ATR levels, and signal bar with `CONFIRMED YES`. Presentation only; when off the chart is unchanged.
 - **Visuals:** H4 EMAs, entry EMAs, BUY/SELL/STRONG markers with direction labels, a latest-signal score label, the latest Entry/SL/TP1/TP2 lines, and a two-section info panel (MARKET / LAST SIGNAL) — every element individually toggleable (incl. the score label).
 
 ## MT5 version
@@ -59,11 +59,11 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 - **Bullish:** 1H EMA 21 > 1H EMA 50 (last closed 1H candle)
 - **Bearish:** 1H EMA 21 < 1H EMA 50
 
-### EMA 9/21 entry (15M)
+### EMA 9/21 entry (chart TF)
 
 - **Bullish crossover:** previous EMA 9 ≤ previous EMA 21 AND current EMA 9 > current EMA 21
 - **Bearish crossover:** previous EMA 9 ≥ previous EMA 21 AND current EMA 9 < current EMA 21
-- Evaluated on the **15M chart** (closed candles only).
+- Evaluated on the **chart timeframe when it is 15m, 1H, or 4H** (closed candles only).
 
 ### ADX filter
 
@@ -76,7 +76,7 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 ### Signal scoring
 
 - Each satisfied component adds its weight (defaults: trend 25, **1H confirmation** 25, ADX 25, slope 25; max 100).
-- **BUY** requires: 4H bullish AND 1H bullish confirmation AND 15M bullish crossover AND score ≥ minimum (default 75), on an **M15 chart**. **SELL** mirrored.
+- **BUY** requires: supported signal TF (15m/1H/4H) AND 4H bullish AND 1H bullish confirmation AND bullish crossover AND score ≥ minimum (default 75). **SELL** mirrored.
 - **STRONG** signals require a higher score threshold (default 100), optional.
 
 ---
@@ -103,6 +103,6 @@ See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
 
 ## Development status
 
-- **TradingView:** `v2.3.0` — three-layer TF architecture (4H trend + 1H confirmation + 15M entry), entries only on M15 charts — working and compiling in the Pine Editor.
+- **TradingView:** `v2.4.0` — three-layer TF architecture with a **15m / 1H / 4H signal-engine policy** (all other timeframes display-only, gated in code) — working and compiling in the Pine Editor.
 - **MT5:** Phase 2 `v2.00` — working on M15 charts.
 - **Next milestone:** a Pine `strategy()` backtest version (planned, not yet implemented).

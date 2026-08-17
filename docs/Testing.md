@@ -12,25 +12,40 @@ How we verify the indicator behaves correctly in TradingView.
 
 If a compile error appears, note the line number and message; fixes are made in the canonical source and re-tested.
 
-## 2. Timeframe matrix
+## 2. Timeframe matrix (signal-engine policy)
 
-The indicator uses a **fixed three-layer architecture** (4H trend + 1H confirmation + 15M entry). Attach it to each timeframe and verify:
+The signal engine is a **3-timeframe system: 15m / 1H / 4H**. Attach the indicator to each timeframe and verify the matrix exactly:
 
-`1m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 12H, 1D`
-
-| Chart TF | Expected panel role | Expected status | Signals |
+| Chart TF | Signal engine | Panel TIMEFRAME | Panel STATUS |
 |---|---|---|---|
-| 1m / 5m / 30m / 2H / 6H / 12H / 1D | the chart TF (e.g. `30m`) | `ENTRY SIGNALS DISABLED - M15 ONLY` (red) | **none** |
-| 15m | `M15 ENTRY` | `ENTRY ACTIVE` (green) | BUY/SELL/STRONG fire here |
-| 1H | `1H CONFIRMATION` | `CONTEXT - NO ENTRIES` | none |
-| 4H | `4H TREND` | `CONTEXT - NO ENTRIES` | none |
+| 1m | **BLOCKED** | `1m` | `SIGNALS DISABLED` (red) + reason `Use 15m / 1H / 4H` |
+| 3m | **BLOCKED** | `3m` | `SIGNALS DISABLED` (red) + reason |
+| 5m | **BLOCKED** | `5m` | `SIGNALS DISABLED` (red) + reason |
+| 15m | **ENABLED** | `15M SIGNAL` | `SIGNAL ENGINE ENABLED` (green) |
+| 30m | **BLOCKED** | `30m` | `SIGNALS DISABLED` (red) + reason |
+| 1H | **ENABLED** | `1H SIGNAL` | `SIGNAL ENGINE ENABLED` (green) |
+| 2H | **BLOCKED** | `2H` | `SIGNALS DISABLED` (red) + reason |
+| 4H | **ENABLED** | `4H SIGNAL` | `SIGNAL ENGINE ENABLED` (green) |
+| 6H | **BLOCKED** | `6H` | `SIGNALS DISABLED` (red) + reason |
+| 12H | **BLOCKED** | `12H` | `SIGNALS DISABLED` (red) + reason |
+| 1D | **BLOCKED** | `1D` | `SIGNALS DISABLED` (red) + reason |
+| 1W | **BLOCKED** | `1W` | `SIGNALS DISABLED` (red) + reason |
 
-For each timeframe verify:
+For every **BLOCKED** timeframe verify:
 
-- The panel shows the correct `TIMEFRAME` / `STATUS` values per the table above.
-- **Signals only ever appear on the 15m chart** — on every other timeframe the arrows must never print, even in history (the `isM15` gate disables them in code, not just visually).
-- On 15m: trend field reads `H4 TREND`, the `1H CONF` row shows the 1H EMA alignment, and ADX is the 15m value.
-- On 1H: the `1H CONF` row uses the chart series; on 4H: the trend uses the chart series (self mode) and the panel reads it with `[1]`.
+- **No BUY/SELL markers** appear, in history or live (the `isSupportedSignalTF` gate disables the engine in code, not just visually).
+- **No Entry/SL/TP1/TP2 level lines or labels** are created.
+- **No `Score …` signal label** is created.
+- **No alerts fire**, and no alert can be triggered from the Alerts dialog on signals (the alert conditions require `buySig`/`sellSig`, which require the gate).
+- The panel shows `SIGNALS DISABLED` and `Use 15m / 1H / 4H`.
+- With `Signal Audit Mode` on, the audit table shows `SIGNAL TF <chart TF>`, `SIGNAL MODE DISABLED`, and `REASON Use 15m / 1H / 4H` — and nothing else.
+
+For every **ENABLED** timeframe (15m / 1H / 4H) verify:
+
+- BUY/SELL/STRONG markers fire on **confirmed closed candles** only.
+- On 15m: the 4H trend and 1H confirmation come from `request.security`; ADX/ATR are 15m values.
+- On 1H: the `1H CONF` row uses the chart series; the 4H trend comes from `request.security`.
+- On 4H: the trend uses the chart series (self mode) — signals fire only at candle close, the panel reads the trend with `[1]`, and the **forming 4H candle never produces a signal**.
 - Signals appear only on closed candles (see §4).
 
 ## 3. Cross-check against built-in indicators
@@ -75,11 +90,12 @@ A failure of steps 2, 4, 6, or 7 is a repaint bug.
 
 1. Enable `EnableAlerts` in the settings.
 2. Create a TradingView alert on the script (or use the exposed `alertcondition`s).
-3. Verify:
+3. Verify on a **supported timeframe** (15m / 1H / 4H):
    - Alerts fire **only when a new signal is confirmed** (at bar close).
    - No alert fires for historical signals when the chart loads.
    - The message contains symbol, timeframe, direction, score, Entry, SL, TP1, TP2.
    - BUY vs STRONG BUY are distinguishable.
+4. Verify on a **blocked timeframe** (e.g. 5m): **no alert ever fires**, even if the settings are enabled.
 
 ## 6. Visual toggles
 
@@ -91,17 +107,19 @@ Each of these must hide/show the corresponding element immediately:
 - `Show signal labels` (shows/hides the latest-signal `Score 75` label; the marker direction labels remain)
 - `Show Entry/SL/TP1/TP2 lines`
 - `Show info panel`
-- `Signal Audit Mode` (Visuals group, default off) — when on, an audit table appears below the info panel **on 15m charts only** with the latest signal's exact values; when off, no audit table and the chart is identical to the default.
+- `Signal Audit Mode` (Visuals group, default off) — when on, an audit table appears below the info panel on **any** chart; when off, no audit table and the chart is identical to the default.
 
 ## 6a. Signal Audit Mode verification
 
-1. Attach to **15m**, enable `Signal Audit Mode`, wait for a signal (or scroll to an existing one), and verify:
+1. On a **supported timeframe** (15m / 1H / 4H), enable `Signal Audit Mode`, wait for a signal (or scroll to an existing one), and verify:
+   - `SIGNAL TF` reads `15M` / `1H` / `4H`; `SIGNAL MODE` reads `ENABLED` (green).
    - SIGNAL/SCORE match the main panel's LAST SIGNAL values exactly.
-   - 4H TREND / 4H SLOPE / 1H CONF / M15 ENTRY / ADX pass-fail marks and score contributions sum to the displayed TOTAL, and TOTAL equals the panel score.
+   - 4H TREND / 4H SLOPE / 1H CONF / ENTRY / ADX pass-fail marks and score contributions sum to the displayed TOTAL, and TOTAL equals the panel score.
    - ENTRY / SL / TP1 / TP2 match the on-chart level lines exactly.
    - ADX and EMA values match the built-in indicators from §3.
-   - BAR shows symbol, timeframe, and the signal candle's time; CONFIRMED reads "YES - closed candle".
-2. On **non-15m charts** the audit table must not appear even when the mode is on.
+   - BAR shows symbol, timeframe, and the signal candle's time; CONFIRMED reads `YES - closed candle` (green).
+2. On a **blocked timeframe** (e.g. 5m): the audit table shows only `SIGNAL TF 5M`, `SIGNAL MODE DISABLED` (red), and `REASON Use 15m / 1H / 4H`.
+3. Disable the mode: the audit table disappears and the chart looks exactly as before.
 
 Toggling level lines on must restore the **latest signal's** levels; toggling off must remove them.
 
@@ -131,7 +149,7 @@ Each change must take effect immediately after re-running the script on the char
 The TradingView and MT5 versions implement the same core logic but are **not** expected to be tick-identical:
 
 - TradingView uses exchange-timezone 4H candles; MT5 uses broker server time — 4H bar boundaries can shift slightly.
-- The MT5 version is M15-attached with the H4 trend and M15 entry; the TradingView v2.3.0 architecture adds the 1H confirmation layer.
+- The MT5 version is M15-attached with the H4 trend and M15 entry; the TradingView v2.4.0 architecture is a 15m / 1H / 4H signal-engine system with a 1H confirmation layer.
 - Compare *patterns* (same signals on the same dates at the same H4 alignment), not exact arrow positions.
 
 ## 10. Backtest (future)

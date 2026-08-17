@@ -2,6 +2,17 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v2.4.0 — Signal-engine timeframe policy (15m / 1H / 4H only)
+
+Date: 2026-08-17
+
+- **3-timeframe signal engine.** New explicit `isSupportedSignalTF` gate — true **only** on 15m, 1H, and 4H charts. The signal engine itself is gated by it, so on every other timeframe (1m/3m/5m/30m/2H/6H/12H/1D/1W/custom) **no BUY/SELL signal, marker, Entry/SL/TP level, score label, or alert can be generated** — display/context only. This replaces the v2.3.0 15M-only entry policy.
+- **Signals on 15m / 1H / 4H.** On each supported chart the signal candle is the **confirmed chart candle**: 15m and 1H use the literal 4H series + `request.security` 1H confirmation; 1H also reads the 1H confirmation from the chart series; **4H uses the chart series for the trend (self mode)** — signals require `barstate.isconfirmed`, so the currently-forming 4H candle can never fire a signal (explicit non-repaint comments added).
+- **Panel:** `STATUS` now reads `SIGNAL ENGINE ENABLED` (green) on supported charts and `SIGNALS DISABLED` (red) on all others, with a new `REASON` row showing `Use 15m / 1H / 4H` on unsupported charts.
+- **Signal Audit Mode** now renders on any chart: it always shows `SIGNAL TF` (15M/1H/4H or the chart TF) and `SIGNAL MODE` (ENABLED/DISABLED, with the reason on blocked charts). On supported timeframes it keeps the full detail rows (4H trend/slope, 1H conf, entry trigger, ADX, score breakdown, ATR levels, signal bar) with a dynamic entry label and `CONFIRMED YES - closed candle`.
+- **Alerts** inherit the gate: `buySig`/`sellSig` require `isSupportedSignalTF`, so blocked timeframes can never fire the `alert()` calls or the `alertcondition`s.
+- **Preserved:** scoring formulas, ATR Entry/SL/TP1/TP2 (1.5/1.5/3.0), ADX/EMA calculations, the four single-line `request.security` H4 calls + two single-line 1H calls (all `lookahead_off`), closed-candle discipline, config validation, and all Pine build-compatibility constraints. MT5 code untouched.
+
 ## v2.3.0 — Three-layer TF architecture (4H trend + 1H confirmation + 15M entry)
 
 Date: 2026-08-17
