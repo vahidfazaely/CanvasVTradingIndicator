@@ -18,7 +18,7 @@ A non-repainting trend-following signal system built on a simple, explicit rule 
 1. **Trend filter** — 4H EMA 50/200 (plus an EMA 50 slope check).
 2. **Confirmation** — 1H EMA fast/slow alignment (EMA 21/50).
 3. **Entry trigger** — 15M EMA 9/21 crossover + ADX strength filter.
-4. **Risk** — ATR-based Entry / SL / TP1 / TP2 levels.
+4. **Risk** — structural Entry / SL / TP1 / TP2 built from market swings and actual risk (R-based).
 5. **Confidence** — a 0–100 signal score with a configurable minimum.
 
 No RSI, no volume-based market structure, no machine learning. The logic is deliberately small and inspectable.
@@ -35,6 +35,7 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 - **Optional quality filters** (all off by default): EMA separation %, price vs EMA 21, H4 momentum, ATR volatility regime, volume confirmation.
 - **Config validation:** EMA periods must satisfy Fast < Slow, not all weights can be zero, and the minimum score cannot exceed the maximum achievable score — otherwise signals are suppressed and the panel shows `CONFIG ERROR` with the reason.
 - **Phase 1 quality gates (v2.5.0):** every signal must pass a sequential pipeline of hard gates — 4H regime (direction + strict slope + ≥ 0.10% separation; flat slope → NEUTRAL → no signal), 1H confirmation + 1H momentum (1H close vs 1H EMA21), entry structure (EMA9/EMA21 + close vs EMA9 + gap expansion), candle quality (body ≥ 50%), ADX ≥ 18, ATR/close ≥ 0.05%, and a chasing filter (|close − EMA9|/ATR ≤ 1.5). A gate failure blocks the signal regardless of score. Audit Mode shows the first failed gate as the rejection reason.
+- **Phase 2 risk engine (v3.1.0):** the position model no longer uses fixed ATR multiples. Entry = signal candle close; the stop is **structural** — `lowest(low, 10)[1] − 0.5·ATR` for BUY / `highest(high, 10)[1] + 0.5·ATR` for SELL (mandatory `[1]`, so the signal candle never defines its own swing). **Risk** = |Entry − SL|. If the structural stop is too tight (< 0.5·ATR) the model falls back to the documented `1.5·ATR` stop; if **risk > 2.5·ATR** the setup is **rejected outright** (hard risk gate — no marker, no levels, no alert). TP1 = Entry ± 1.0R, TP2 = Entry ± 2.5R — both derived from actual risk, never from ATR. The panel shows `RISK` (in ATR) and `R:R`; Audit Mode shows the full breakdown (STRUCT SL, FINAL SL, SL MODE, RISK, RISK ATR, TP1 R, TP2 R, R:R).
 - **Signal Audit Mode** (default off): a debug-only diagnostic table that first reports the timeframe policy — `SIGNAL TF` (15M/1H/4H or the chart TF) and `SIGNAL MODE` (`ENABLED` / `DISABLED`, with the reason `Use 15m / 1H / 4H` on unsupported charts). On supported timeframes it additionally shows the exact values and conditions that produced the latest confirmed signal — 4H trend/slope, 1H confirmation, entry trigger, ADX, score breakdown, ATR levels, and signal bar with `CONFIRMED YES`. Presentation only; when off the chart is unchanged.
 - **Visuals:** H4 EMAs, entry EMAs, BUY/SELL/STRONG markers with direction labels, a latest-signal score label, the latest Entry/SL/TP1/TP2 lines, and a two-section info panel (MARKET / LAST SIGNAL) — every element individually toggleable (incl. the score label).
 
@@ -70,9 +71,12 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 
 - ADX period 14, minimum 20, computed on the entry timeframe, closed candle only.
 
-### ATR SL/TP
+### Structural SL / R-based TP (v3.1.0)
 
-- ATR period 14. **BUY:** SL = Entry − ATR×1.5, TP1 = Entry + ATR×1.5, TP2 = Entry + ATR×3.0. **SELL:** mirrored. Entry = signal candle close. Multipliers configurable.
+- **Entry** = signal candle close. **Structural SL** uses the swing of the previous `10` completed bars (the signal candle is excluded via `[1]`): BUY `SL = lowest(low, 10)[1] − 0.5·ATR`, SELL `SL = highest(high, 10)[1] + 0.5·ATR`.
+- **Risk** = |Entry − SL|. **TP1 = Entry ± 1.0·Risk**, **TP2 = Entry ± 2.5·Risk** — take-profits are multiples of actual risk (R), never of ATR.
+- **Fallback:** a structural stop tighter than 0.5·ATR (or invalid) falls back to the documented `1.5·ATR` stop — it never blocks the signal.
+- **Hard risk gate:** a setup whose risk exceeds **2.5·ATR** is **rejected** (no signal, no levels, no alert; Audit Mode reason `RISK TOO LARGE`).
 
 ### Signal scoring
 
@@ -104,6 +108,6 @@ See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
 
 ## Development status
 
-- **TradingView:** `v2.5.0` — three-layer TF architecture with a **15m / 1H / 4H signal-engine policy** plus **Phase 1 quality gates** (regime, 1H momentum, entry structure, candle quality, ADX floor, volatility floor, chasing filter) — working and compiling in the Pine Editor.
+- **TradingView:** `v3.1.0` — three-layer TF architecture with a **15m / 1H / 4H signal-engine policy**, **Phase 1 quality gates** (regime, 1H momentum, entry structure, candle quality, ADX floor, volatility floor, chasing filter), and the **Phase 2 structural risk engine** (structural SL, risk validation, R-based TP1/TP2) — working and compiling in the Pine Editor.
 - **MT5:** Phase 2 `v2.00` — working on M15 charts.
 - **Next milestone:** a Pine `strategy()` backtest version (planned, not yet implemented).

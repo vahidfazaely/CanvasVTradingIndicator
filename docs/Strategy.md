@@ -1,6 +1,6 @@
 # Strategy — CanvasV MTF Signal
 
-This document describes the **current baseline** (TradingView `v2.5.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v3.1.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
 
 ---
 
@@ -11,7 +11,7 @@ This document describes the **current baseline** (TradingView `v2.5.0` / MT5 Pha
 | Trend | 4H EMA 50 / EMA 200 + EMA 50 slope |
 | Confirmation | 1H EMA 21 / EMA 50 |
 | Entry trigger | Chart TF (15m / 1H / 4H) EMA 9 / 21 crossover + ADX |
-| Risk | ATR(14) → Entry, SL, TP1, TP2 |
+| Risk | Structural SL + risk validation + R-based TP1/TP2 |
 | Confidence | Weighted score 0–100, minimum 75 |
 
 The intended hierarchy is: **4H** = main market direction, **1H** = intermediate momentum confirmation, **entry timeframe** (15m / 1H / 4H) = entry trigger. This is one consistent strategy, not three independent ones.
@@ -72,7 +72,7 @@ Evaluated only on **closed candles**. The crossover is a hard requirement of the
 ## 5. ADX filter
 
 - `ADX = ta.dmi(period, period)` main line (Wilder's ADX; Pine has no `ta.adx`), computed on the **chart series (15m / 1H / 4H)**.
-- Defaults: period 14, minimum 20.0.
+- Defaults: period 14, minimum 18.0 (hard gate since v2.5.0).
 - The ADX value of the **closed signal candle** is used.
 - Weight configurable; set to 0 to disable the ADX component.
 
@@ -113,7 +113,7 @@ Hard gates — any failure blocks the signal **regardless of score**. The existi
 
 A **flat 4H slope** (EMA50 == EMA50[prev]) counts for neither direction → `NEUTRAL` regime → no signal. A **converged regime** (separation below the minimum) is likewise rejected.
 
-In **Audit Mode**, a rejected candidate setup shows the **first failed gate** in the `REASON` row (`4H REGIME` / `1H CONFIRMATION` / `1H MOMENTUM` / `ENTRY STRUCTURE` / `CANDLE QUALITY` / `ADX` / `VOLATILITY` / `CHASING` / `OPTIONAL FILTERS` / `SCORE TOO LOW`), distinguishing "setup rejected" from "setup passed but score too low".
+In **Audit Mode**, a rejected candidate setup shows the **first failed gate** in the `REASON` row (`4H REGIME` / `1H CONFIRMATION` / `1H MOMENTUM` / `ENTRY STRUCTURE` / `CANDLE QUALITY` / `ADX` / `VOLATILITY` / `CHASING` / `OPTIONAL FILTERS` / `ATR INVALID` / `SCORE TOO LOW` / `RISK TOO LARGE` / `INVALID STRUCTURE`), distinguishing "setup rejected" from "setup passed but score too low" and from "position rejected by the risk gate".
 
 ---
 
@@ -135,10 +135,11 @@ Each component contributes its weight when satisfied:
 **Config validation:** signals are suppressed when the inputs are internally inconsistent:
 
 - any EMA Fast ≥ its Slow (4H, 1H, or M15 entry),
+- the **risk inputs** are inconsistent (`Swing lookback < 2`, `Structure buffer < 0`, `Minimum risk ≤ 0`, `Maximum risk ≤ Minimum risk`, `TP1 R ≤ 0`, or `TP2 R ≤ TP1 R`),
 - all weights are 0 (`maxScore = 0`),
 - `MinimumScore > maxScore`.
 
-The panel header then reads `CONFIG ERROR` and the bottom row shows the reason (`EMA fast >= slow`, `all weights are 0`, `min score > max`). Weight inputs are clamped to ≥ 0 in the settings UI, so negative weights are not possible.
+The panel header then reads `CONFIG ERROR` and the bottom row shows the reason (`EMA fast >= slow`, `risk config invalid`, `all weights are 0`, `min score > max`). Weight inputs are clamped to ≥ 0 in the settings UI, so negative weights are not possible.
 
 ---
 
@@ -159,6 +160,7 @@ AND ATR/close ≥ 0.05%
 AND |close − EMA9|/ATR ≤ 1.5
 AND all enabled optional gates pass
 AND score ≥ MinimumScore (default 75)
+AND valid position risk (risk ≤ MaximumRiskATR × ATR; structural SL from `lowest(low, 10)[1] − 0.5·ATR` or its documented fallback)
 ```
 
 **SELL** (exact): mirrored.
@@ -174,18 +176,43 @@ AND score ≥ StrongScore (default 100)
 
 ---
 
-## 10. ATR risk levels
+## 10. Position / risk engine (v3.1.0)
 
-ATR period 14, values of the closed signal candle, Entry = signal candle close:
+Replaces the old fixed ATR-multiplier model. Entry = `close` of the confirmed signal candle.
 
-| | BUY | SELL |
-|---|---|---|
-| Entry | `close` | `close` |
-| SL | `Entry − ATR × 1.5` | `Entry + ATR × 1.5` |
-| TP1 | `Entry + ATR × 1.5` | `Entry − ATR × 1.5` |
-| TP2 | `Entry + ATR × 3.0` | `Entry − ATR × 3.0` |
+### Structural SL
 
-Multipliers are configurable inputs.
+BUY: `SL = lowest(low, SwingLookback)[1] − ATR × StructureBufferATR`
+
+SELL: `SL = highest(high, SwingLookback)[1] + ATR × StructureBufferATR`
+
+The `[1]` is mandatory — the swing uses **previously completed entry-timeframe bars only**, so the forming signal candle can never define its own structural stop (chart series only, no `request.security`, no lookahead). Defaults: lookback 10, buffer 0.5×ATR.
+
+### Risk
+
+`Risk = |Entry − SL|` (always positive for a valid position). `RiskATR = Risk / ATR` (safe division).
+
+### Minimum-risk fallback
+
+If the structural stop is **too tight or invalid** (`Risk < MinimumRiskATR × ATR`, e.g. the swing is inside the ATR buffer), the model does **not** reject the signal — it falls back to the documented ATR stop: BUY `SL = Entry − 1.5×ATR`, SELL `SL = Entry + 1.5×ATR`, then recalculates Risk/RiskATR. The final SL is always strictly below Entry (BUY) / above Entry (SELL).
+
+### Maximum-risk rejection (hard gate)
+
+If `Risk > MaximumRiskATR × ATR` (default 2.5), the setup is **rejected**: no marker, no Entry/SL/TP levels, no score label, no alert, and no last-signal-state update. Audit Mode shows `RISK TOO LARGE` (or `INVALID STRUCTURE` / `ATR INVALID` for the other risk-gate failures). This is a hard gate, not a score adjustment.
+
+### ATR safety
+
+If ATR is `na` or zero, no position is computed — the signal is rejected (`ATR INVALID`). No division by zero, no manufactured risk value.
+
+### R-based take-profits
+
+TPs are computed from the **actual risk**, never from ATR:
+
+BUY: `TP1 = Entry + Risk × TP1_R`, `TP2 = Entry + Risk × TP2_R`
+
+SELL: `TP1 = Entry − Risk × TP1_R`, `TP2 = Entry − Risk × TP2_R`
+
+Defaults `TP1_R = 1.0`, `TP2_R = 2.5`, so TP1 = exactly 1R and TP2 = exactly 2.5R. The displayed R:R is **calculated from the prices** (`(TP1 − Entry)/Risk`, `(TP2 − Entry)/Risk`), so it always stays correct if the R-multiple inputs change.
 
 ---
 
@@ -194,7 +221,8 @@ Multipliers are configurable inputs.
 - Signals are only evaluated when `barstate.isconfirmed` (live bar) or on fully closed historical bars.
 - **H4 methodology:** each H4 value is a separate `request.security(syminfo.tickerid, "240", expr, lookahead = barmerge.lookahead_off)` call. With `lookahead_off` the value only updates when an H4 candle **completes**: during the forming H4 candle it holds the last closed H4 value and is step-constant (never rewrites history); at the exact H4 boundary bar it is the just-completed candle's final value, which is confirmed data at that bar's close. The slope baseline `h4e50PrevH` applies `[1]` **inside** the H4 context — one H4 candle before the last closed one, i.e. two consecutive confirmed H4 values.
 - **4H self mode:** on the 4H chart the trend is the chart's own EMA series. Intra-bar it moves with the forming candle's ticks, but signals require `barstate.isconfirmed`, so only the **closed candle's** final values are ever used — a forming 4H candle can never fire a signal. The slope baseline is the previous closed 4H candle.
-- Arrows, level lines, labels and alerts are created once per signal from closed data and are never re-evaluated; the latest-signal state is frozen in `var` variables and replaced only by a newer confirmed signal.
+- **Structural SL:** `lowest(low, N)[1]` / `highest(high, N)[1]` use only previously completed bars — the forming signal candle is excluded, so changing its low/high can never retroactively move the stop. Final Entry/SL/TP/Risk are deterministic after candle close; reloading reproduces the same values.
+- Arrows, level lines, labels and alerts are created once per signal from closed data and are never re-evaluated; the latest-signal state (including Risk and R:R) is frozen in `var` variables and replaced only by a newer confirmed signal.
 - There is no `lookahead_on` anywhere in the code.
 
 ---
@@ -208,7 +236,12 @@ Multipliers are configurable inputs.
 | Entry EMA Fast / Slow (chart TF) | 9 / 21 |
 | Supported signal timeframes | 15m / 1H / 4H |
 | ADX weight / period / minimum (gate) | 25 / 14 / 18.0 |
-| ATR period / SL / TP1 / TP2 | 14 / 1.5 / 1.5 / 3.0 |
+| ATR period | 14 |
+| Swing lookback | 10 |
+| Structure buffer (ATR) | 0.5 |
+| Minimum risk (ATR) | 0.5 |
+| Maximum risk (ATR) | 2.5 |
+| TP1 / TP2 R multiple | 1.0 / 2.5 |
 | Trend / 1H Conf / Slope weights | 25 / 25 / 25 |
 | Minimum score | 75 |
 | STRONG enabled / threshold | on / 100 |

@@ -2,6 +2,22 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v3.1.0 — Phase 2: structural risk & R-based position engine
+
+Date: 2026-08-17
+
+- **Replaced the fixed ATR-multiple position model** with a structural, risk-based engine. There is now ONE position source of truth: Entry → Structural SL → Risk validation → R-based TP1/TP2. The old normal ATR SL/TP formulas (1.5/1.5/3.0) are gone from the code; the `1.5×ATR` stop survives only as the documented **minimum-risk fallback**.
+- **New `Risk` input group** (old `ATR SL/TP Multiplier` inputs removed): `Swing lookback` = 10, `Structure buffer (ATR)` = 0.5, `Minimum risk (ATR)` = 0.5, `Maximum risk (ATR)` = 2.5, `TP1 R multiple` = 1.0, `TP2 R multiple` = 2.5. `ATR Period` remains.
+- **Structural SL:** BUY `SL = lowest(low, 10)[1] − 0.5×ATR`, SELL `SL = highest(high, 10)[1] + 0.5×ATR`. The mandatory `[1]` excludes the forming signal candle — it can never define its own swing (chart series only, no `request.security`, no lookahead, no repaint).
+- **Risk:** `Risk = |Entry − SL|`, `RiskATR = Risk / ATR` (safe division). **Minimum-risk fallback:** a stop tighter than `0.5×ATR` (or invalid) falls back to `Entry ∓ 1.5×ATR` and the signal still fires; the final SL is always strictly below/above Entry. **Maximum-risk gate (HARD):** `Risk > 2.5×ATR` → **NO SIGNAL** — no marker, no levels, no score label, no alert, no last-signal-state update.
+- **ATR safety:** `na`/zero ATR → no position, signal rejected (`ATR INVALID`). No division by zero.
+- **R-based TPs:** `TP1 = Entry ± Risk×1.0`, `TP2 = Entry ± Risk×2.5` — multiples of actual risk, never ATR. Displayed R:R is computed from the actual prices (`(TP1−Entry)/Risk`, `(TP2−Entry)/Risk`), so it stays correct if the R inputs change.
+- **Panel:** two new compact rows under TP2 — `RISK` (in ATR) and `R:R` (`1.0 / 2.5`). No other layout change.
+- **Audit Mode:** new rows `STRUCT SL`, `FINAL SL`, `SL MODE` (`STRUCTURAL` / `ATR FALLBACK`), `RISK`, `RISK ATR`, `TP1 R`, `TP2 R`, `R:R`. Rejection reasons extended: `ATR INVALID`, `RISK TOO LARGE`, `INVALID STRUCTURE` (first-failed-gate order preserved).
+- **Config validation:** new `riskCfgOk` — signals suppressed when `Swing lookback < 2`, `Structure buffer < 0`, `Minimum risk ≤ 0`, `Maximum risk ≤ Minimum risk`, `TP1 R ≤ 0`, or `TP2 R ≤ TP1 R` (panel reason `risk config invalid`).
+- **Unchanged:** ALL Phase 1 signal gates (4H regime, 1H confirmation, 1H momentum, entry structure, candle quality, ADX, volatility floor, chasing) — byte-identical; the score model and thresholds; the TF policy (15m/1H/4H only); HTF `request.security` methodology (7 single-line calls, `lookahead_off`); `barstate.isconfirmed` gating; alerts (once per confirmed signal, downstream of the final valid signal); repaint protection; all Pine build-compatibility constraints. MT5 code untouched.
+- **No profitability claim** — the effect of structural stops vs ATR stops requires backtesting.
+
 ## v2.5.0 — Phase 1 of Signal Engine v3: quality gates
 
 Date: 2026-08-17

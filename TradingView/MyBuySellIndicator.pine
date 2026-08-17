@@ -9,6 +9,7 @@
 //|  v2.3.0 - TF architecture: 4H trend + 1H confirmation + 15M entry |
 //|  v2.4.0 - Signal engine policy: 15m / 1H / 4H only               |
 //|  v2.5.0 - Phase 1 (v3): quality gates                             |
+//|  v3.1.0 - Phase 2: structural SL + risk validation + R-based TP   |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -41,7 +42,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v2.5.0"
+VERSION = "v3.1.0"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -50,7 +51,7 @@ grpTrend  = "=== Trend ==="
 grpEntry  = "=== Entry ==="
 grpH1     = "=== 1H Confirmation ==="
 grpAdx    = "=== ADX ==="
-grpRisk   = "=== ATR / Risk ==="
+grpRisk   = "=== Risk ==="
 grpScore  = "=== Signal Scoring ==="
 grpOpt    = "=== Optional Filters ==="
 grpVis    = "=== Visuals ==="
@@ -73,10 +74,14 @@ adxWeight = input.int(25,     "ADX Weight (0 = off)", minval = 0, group = grpAdx
 adxPeriod = input.int(14,     "ADX Period",           minval = 1, group = grpAdx)
 adxMin    = input.float(18.0, "ADX Minimum", minval = 0, maxval = 100, group = grpAdx)
 
-atrPeriod  = input.int(14,     "ATR Period",          minval = 1, group = grpRisk)
-atrSlMult  = input.float(1.5,  "ATR SL Multiplier",   minval = 0.1, group = grpRisk)
-atrTp1Mult = input.float(1.5,  "ATR TP1 Multiplier",  minval = 0.1, group = grpRisk)
-atrTp2Mult = input.float(3.0,  "ATR TP2 Multiplier",  minval = 0.1, group = grpRisk)
+atrPeriod       = input.int(14,     "ATR Period",            minval = 1, group = grpRisk)
+swingLookback   = input.int(10,     "Swing lookback",        minval = 2, group = grpRisk)
+structBufferAtr = input.float(0.5,  "Structure buffer (ATR)", minval = 0, group = grpRisk)
+minRiskAtr      = input.float(0.5,  "Minimum risk (ATR)",    minval = 0.01, group = grpRisk)
+maxRiskAtr      = input.float(2.5,  "Maximum risk (ATR)",    minval = 0.01, group = grpRisk)
+tp1R            = input.float(1.0,  "TP1 R multiple",        minval = 0.01, group = grpRisk)
+tp2R            = input.float(2.5,  "TP2 R multiple",        minval = 0.01, group = grpRisk)
+atrFallbackMult = 1.5     // fixed ATR fallback (too-tight / invalid structure only)
 minVolPct   = input.float(0.05, "Min volatility (ATR % of price)", minval = 0, group = grpRisk)
 maxEntryDist = input.float(1.5, "Max entry distance from EMA9 (ATR)", minval = 0.1, group = grpRisk)
 
@@ -283,36 +288,87 @@ maxScore = trendWeight + momWeight + adxWeight + slopeWeight + atrVolWeight + vo
 //--- score can never exceed the maximum achievable score. Any
 //--- violation blocks signals and shows the reason in the panel.
 periodsOk = h4Fast < h4Slow and entryFast < entrySlow and h1Fast < h1Slow
+//--- Risk config must be sane: a usable lookback, non-negative buffer,
+//--- positive minimum risk, max risk above min, and valid R multiples.
+riskCfgOk = swingLookback >= 2 and structBufferAtr >= 0 and minRiskAtr > 0 and maxRiskAtr > minRiskAtr and tp1R > 0 and tp2R > tp1R
 scoreOk   = maxScore > 0 and minScore <= maxScore
-configOk  = periodsOk and scoreOk
-cfgReason = not periodsOk ? "EMA fast >= slow" : maxScore <= 0 ? "all weights are 0" : minScore > maxScore ? "min score > max" : ""
+configOk  = periodsOk and riskCfgOk and scoreOk
+cfgReason = not periodsOk ? "EMA fast >= slow" : not riskCfgOk ? "risk config invalid" : maxScore <= 0 ? "all weights are 0" : minScore > maxScore ? "min score > max" : ""
 
 buyScore  = (h4Bull   ? trendWeight : 0) + (h1ConfUp ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeUp  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
 sellScore = (h4Bear   ? trendWeight : 0) + (h1ConfDn ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeDn  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
 
+//--------------------------------------------------------------
+// Position / Risk model (Phase 2): structural SL + R-based TP
+//  entry        = close of the confirmed signal candle
+//  structural SL = swing (bars [1..swingLookback] back; the signal
+//                  candle is EXCLUDED via the mandatory [1]) +- ATR
+//                  * structure buffer  - chart series only, no
+//                  request.security, no lookahead, no future bars
+//  risk         = |entry - final SL|  (the source of truth for TPs)
+//  TPs          = entry +- risk * R multiple  (NOT from ATR)
+//  ATR fallback = structural stop too tight / invalid (risk <
+//                  minimumRiskATR * ATR) -> SL = entry -+ 1.5 * ATR
+//  Risk gate    = risk > maximumRiskATR * ATR  -> NO SIGNAL (hard)
+//  ATR safety   = na / zero ATR -> NO SIGNAL (no manufactured risk)
+//  Repaint: all inputs are confirmed values; [1] excludes the
+//  forming candle; final SL/TP/risk are deterministic after close.
+//--------------------------------------------------------------
+entry = close
+
+//--- ATR must be usable: na or zero ATR => no valid position (all
+//--- divisions below use math.max() guards, never divide by zero)
+atrUsable = not na(atrVal) and atrVal > 0
+
+//--- Structural swings: previously completed bars ONLY. The [1] is
+//--- mandatory - the forming signal candle must never define its
+//--- own structural swing (no repaint, no lookahead).
+swingLow  = lowest(low,  swingLookback)[1]
+swingHigh = highest(high, swingLookback)[1]
+
+//--- Raw structural stops (may be tight/invalid; the final SL below
+//--- falls back to ATR when the structure is too tight)
+structSLBuy  = swingLow  - atrVal * structBufferAtr
+structSLSell = swingHigh + atrVal * structBufferAtr
+
+//--- BUY position
+riskStructBuy = entry - structSLBuy
+slModeBuy     = riskStructBuy >= minRiskAtr * atrVal   // false: too tight / invalid -> fallback
+slBuy         = slModeBuy ? structSLBuy : entry - atrFallbackMult * atrVal
+riskBuy       = entry - slBuy
+riskAtrBuy    = riskBuy / math.max(atrVal, 1e-10)
+riskGateBuyOk = atrUsable and slBuy < entry and riskAtrBuy <= maxRiskAtr
+//--- TPs are risk-based (never from ATR). R:R is computed from the
+//--- actual prices so it always stays correct if inputs change.
+tp1Buy        = entry + riskBuy * tp1R
+tp2Buy        = entry + riskBuy * tp2R
+rrTp1Buy      = (tp1Buy - entry) / math.max(riskBuy, 1e-10)
+rrTp2Buy      = (tp2Buy - entry) / math.max(riskBuy, 1e-10)
+
+//--- SELL position (mirror)
+riskStructSell = structSLSell - entry
+slModeSell     = riskStructSell >= minRiskAtr * atrVal
+slSell         = slModeSell ? structSLSell : entry + atrFallbackMult * atrVal
+riskSell       = slSell - entry
+riskAtrSell    = riskSell / math.max(atrVal, 1e-10)
+riskGateSellOk = atrUsable and slSell > entry and riskAtrSell <= maxRiskAtr
+tp1Sell        = entry - riskSell * tp1R
+tp2Sell        = entry - riskSell * tp2R
+rrTp1Sell      = (entry - tp1Sell) / math.max(riskSell, 1e-10)
+rrTp2Sell      = (entry - tp2Sell) / math.max(riskSell, 1e-10)
+
 //--- BUY requires a supported signal timeframe (15m/1H/4H) + 4H
-//--- trend + 1H confirmation + entry crossover + score >= minimum.
-//--- On unsupported charts isSupportedSignalTF is false, so the
-//--- signal engine (and therefore markers, levels, labels and
-//--- alerts) cannot fire.
-buySig  = isConfirmed and configOk and isSupportedSignalTF and regimeUpOk and h1ConfUp and h1MomUp and setupGateUp and crossUp and candleUpOk and adxGateOk and volFloorOk and chaseGateOk and buyGate  and buyScore  >= minScore
+//--- trend + 1H confirmation + entry crossover + score >= minimum
+//--- + valid position risk (final hard gate). On unsupported charts
+//--- isSupportedSignalTF is false, so the signal engine (and
+//--- therefore markers, levels, labels and alerts) cannot fire.
+buySig  = isConfirmed and configOk and isSupportedSignalTF and regimeUpOk and h1ConfUp and h1MomUp and setupGateUp and crossUp and candleUpOk and adxGateOk and volFloorOk and chaseGateOk and buyGate  and buyScore  >= minScore and riskGateBuyOk
 //--- SELL mirrors BUY
-sellSig = isConfirmed and configOk and isSupportedSignalTF and regimeDnOk and h1ConfDn and h1MomDn and setupGateDn and crossDn and candleDnOk and adxGateOk and volFloorOk and chaseGateOk and sellGate and sellScore >= minScore
+sellSig = isConfirmed and configOk and isSupportedSignalTF and regimeDnOk and h1ConfDn and h1MomDn and setupGateDn and crossDn and candleDnOk and adxGateOk and volFloorOk and chaseGateOk and sellGate and sellScore >= minScore and riskGateSellOk
 
 //--- STRONG signals: higher score threshold (configurable, optional)
 strongBuy  = buySig  and enableStrong and buyScore  >= strongScore
 strongSell = sellSig and enableStrong and sellScore >= strongScore
-
-//--------------------------------------------------------------
-// ATR risk levels (ATR of the closed signal candle)
-//--------------------------------------------------------------
-entry   = close
-slBuy   = entry - atrVal * atrSlMult
-tp1Buy  = entry + atrVal * atrTp1Mult
-tp2Buy  = entry + atrVal * atrTp2Mult
-slSell  = entry + atrVal * atrSlMult
-tp1Sell = entry - atrVal * atrTp1Mult
-tp2Sell = entry - atrVal * atrTp2Mult
 
 //--------------------------------------------------------------
 // EMAs on the chart (individually toggleable)
@@ -349,6 +405,10 @@ var float lastEntry   = na
 var float lastSL      = na
 var float lastTP1     = na
 var float lastTP2     = na
+var float lastRisk    = na
+var float lastRiskAtr = na
+var float lastRR1     = na
+var float lastRR2     = na
 var float lastSigHigh = na
 var float lastSigLow  = na
 var int   lastSigBar  = na
@@ -377,6 +437,12 @@ var int    audVolConfPts = 0
 var float  audH1Fast     = na
 var float  audH1Slow     = na
 var int    audBarTime    = na
+var float  audStructSL   = na
+var float  audRisk       = na
+var float  audRiskAtr    = na
+var float  audRR1        = na
+var float  audRR2        = na
+var string audSlMode     = ""
 
 //--------------------------------------------------------------
 // On a new confirmed BUY / STRONG BUY: remember + redraw levels
@@ -389,6 +455,10 @@ if buySig
     lastSL      := slBuy
     lastTP1     := tp1Buy
     lastTP2     := tp2Buy
+    lastRisk    := riskBuy
+    lastRiskAtr := riskAtrBuy
+    lastRR1     := rrTp1Buy
+    lastRR2     := rrTp2Buy
     lastSigHigh := high
     lastSigLow  := low
     lastSigBar  := bar_index
@@ -417,6 +487,12 @@ if buySig
     audH1Fast    := h1FastV
     audH1Slow    := h1SlowV
     audBarTime   := time
+    audStructSL  := structSLBuy
+    audRisk      := riskBuy
+    audRiskAtr   := riskAtrBuy
+    audRR1       := rrTp1Buy
+    audRR2       := rrTp2Buy
+    audSlMode    := slModeBuy ? "STRUCTURAL" : "ATR FALLBACK"
 
     //--- Remove the previous signal's levels (na-safe: a signal may
     //--- have fired while showLevels was off, leaving na ids)
@@ -464,6 +540,10 @@ if sellSig
     lastSL      := slSell
     lastTP1     := tp1Sell
     lastTP2     := tp2Sell
+    lastRisk    := riskSell
+    lastRiskAtr := riskAtrSell
+    lastRR1     := rrTp1Sell
+    lastRR2     := rrTp2Sell
     lastSigHigh := high
     lastSigLow  := low
     lastSigBar  := bar_index
@@ -492,6 +572,12 @@ if sellSig
     audH1Fast    := h1FastV
     audH1Slow    := h1SlowV
     audBarTime   := time
+    audStructSL  := structSLSell
+    audRisk      := riskSell
+    audRiskAtr   := riskAtrSell
+    audRR1       := rrTp1Sell
+    audRR2       := rrTp2Sell
+    audSlMode    := slModeSell ? "STRUCTURAL" : "ATR FALLBACK"
 
     //--- Remove the previous signal's levels (na-safe)
     if not na(lnEntry)
@@ -652,7 +738,7 @@ var table pan = na
 
 if showPanel
     if na(pan)
-        pan := table.new(position.top_right, 2, 16, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        pan := table.new(position.top_right, 2, 18, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Title
     table.cell(pan, 0, 0, "CANVASV MTF SIGNAL", text_color = color.white,  text_size = size.normal)
@@ -689,9 +775,13 @@ if showPanel
     table.cell(pan, 1, 13, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
     table.cell(pan, 0, 14, "TP2", text_color = color.silver, text_size = size.small)
     table.cell(pan, 1, 14, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
+    table.cell(pan, 0, 15, "RISK", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 15, na(lastRiskAtr) ? "--" : str.tostring(lastRiskAtr, "#.##") + " ATR", text_color = color.white, text_size = size.normal)
+    table.cell(pan, 0, 16, "R:R", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 16, na(lastRR1) ? "--" : str.tostring(lastRR1, "#.##") + " / " + str.tostring(lastRR2, "#.##"), text_color = color.white, text_size = size.normal)
     //--- Config warning (reason shown when inputs are inconsistent)
-    table.cell(pan, 0, 15, configOk ? "" : "CONFIG", text_color = color.red, text_size = size.small)
-    table.cell(pan, 1, 15, configOk ? "" : cfgReason, text_color = color.red, text_size = size.small)
+    table.cell(pan, 0, 17, configOk ? "" : "CONFIG", text_color = color.red, text_size = size.small)
+    table.cell(pan, 1, 17, configOk ? "" : cfgReason, text_color = color.red, text_size = size.small)
 else
     if not na(pan)
         table.delete(pan)
@@ -735,15 +825,15 @@ rejectTxt := ""
 isCandidateUp = isConfirmed and configOk and isSupportedSignalTF and crossUp
 isCandidateDn = isConfirmed and configOk and isSupportedSignalTF and crossDn
 if isCandidateUp
-    rejectTxt := not regimeUpOk ? "4H REGIME" : not h1ConfUp ? "1H CONFIRMATION" : not h1MomUp ? "1H MOMENTUM" : not setupGateUp ? "ENTRY STRUCTURE" : not candleUpOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not buyGate ? "OPTIONAL FILTERS" : buyScore < minScore ? "SCORE TOO LOW" : ""
+    rejectTxt := not regimeUpOk ? "4H REGIME" : not h1ConfUp ? "1H CONFIRMATION" : not h1MomUp ? "1H MOMENTUM" : not setupGateUp ? "ENTRY STRUCTURE" : not candleUpOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not buyGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : buyScore < minScore ? "SCORE TOO LOW" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
 if isCandidateDn
-    rejectTxt := not regimeDnOk ? "4H REGIME" : not h1ConfDn ? "1H CONFIRMATION" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? "ENTRY STRUCTURE" : not candleDnOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : sellScore < minScore ? "SCORE TOO LOW" : ""
+    rejectTxt := not regimeDnOk ? "4H REGIME" : not h1ConfDn ? "1H CONFIRMATION" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? "ENTRY STRUCTURE" : not candleDnOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : sellScore < minScore ? "SCORE TOO LOW" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
 
 var table aud = na
 
 if auditMode
     if na(aud)
-        aud := table.new(position.top_right, 2, 25, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        aud := table.new(position.top_right, 2, 32, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Header
     table.cell(aud, 0, 0, "— SIGNAL AUDIT —", text_color = color.white,  text_size = size.small)
@@ -800,20 +890,34 @@ if auditMode and isSupportedSignalTF
     //--- Total (exact existing score)
     table.cell(aud, 0, 18, "TOTAL", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 18, audScoreTxt, text_color = color.white, text_size = size.normal)
-    //--- Price levels (exact existing ATR levels)
+    //--- Price levels (structural SL + risk-based TPs)
     table.cell(aud, 0, 19, "ENTRY", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 19, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
-    table.cell(aud, 0, 20, "SL", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 20, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
-    table.cell(aud, 0, 21, "TP1", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 21, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
-    table.cell(aud, 0, 22, "TP2", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 22, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
+    table.cell(aud, 0, 20, "STRUCT SL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 20, na(audStructSL) ? "--" : str.tostring(audStructSL, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(aud, 0, 21, "FINAL SL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 21, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
+    table.cell(aud, 0, 22, "SL MODE", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 22, na(lastSL) ? "--" : audSlMode, text_color = color.silver, text_size = size.small)
+    table.cell(aud, 0, 23, "RISK", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 23, na(lastRisk) ? "--" : str.tostring(lastRisk, format.mintick), text_color = color.white, text_size = size.normal)
+    table.cell(aud, 0, 24, "RISK ATR", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 24, na(lastRiskAtr) ? "--" : str.tostring(lastRiskAtr, "#.##") + " ATR", text_color = color.white, text_size = size.normal)
+    table.cell(aud, 0, 25, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 25, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
+    table.cell(aud, 0, 26, "TP1 R", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 26, na(lastRR1) ? "--" : str.tostring(lastRR1, "#.##"), text_color = color.silver, text_size = size.small)
+    table.cell(aud, 0, 27, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 27, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
+    table.cell(aud, 0, 28, "TP2 R", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 28, na(lastRR2) ? "--" : str.tostring(lastRR2, "#.##"), text_color = color.silver, text_size = size.small)
+    table.cell(aud, 0, 29, "R:R", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 29, na(lastRR1) ? "--" : str.tostring(lastRR1, "#.##") + " / " + str.tostring(lastRR2, "#.##"), text_color = color.white, text_size = size.normal)
     //--- Signal bar
-    table.cell(aud, 0, 23, "BAR", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 23, syminfo.ticker + " " + timeframe.period + "  " + (na(audBarTime) ? "--" : str.tostring(audBarTime, "yyyy-MM-dd HH:mm")), text_color = color.silver, text_size = size.small)
-    table.cell(aud, 0, 24, "CONFIRMED", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 24, audConfirmedTxt, text_color = color.lime, text_size = size.small)
+    table.cell(aud, 0, 30, "BAR", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 30, syminfo.ticker + " " + timeframe.period + "  " + (na(audBarTime) ? "--" : str.tostring(audBarTime, "yyyy-MM-dd HH:mm")), text_color = color.silver, text_size = size.small)
+    table.cell(aud, 0, 31, "CONFIRMED", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 31, audConfirmedTxt, text_color = color.lime, text_size = size.small)
 
 //--- Cleanup when the mode is off
 if not auditMode

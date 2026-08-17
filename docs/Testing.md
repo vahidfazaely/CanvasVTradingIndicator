@@ -70,7 +70,22 @@ Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejec
 | 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
 | 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
 
-Restore defaults after each test (panel shows `v2.5.0`).
+Restore defaults after each test (panel shows `v3.1.0`).
+
+## 2b. Position / risk engine tests (Phase 2, v3.1.0)
+
+| # | Test | How | Expected |
+|---|---|---|---|
+| A | BUY structural SL | On a valid BUY signal, compare the chart SL line | `SL = lowest(low, 10)[1] − 0.5×ATR` (swing of the 10 bars *before* the signal candle) |
+| B | SELL structural SL | On a valid SELL signal, compare the chart SL line | `SL = highest(high, 10)[1] + 0.5×ATR` |
+| C | Current-candle exclusion | After a BUY signal, inspect the SL formula in Audit Mode (`STRUCT SL` row); mentally recompute with the signal candle's own low | Changing the signal candle's low/high cannot change the structural SL — the `[1]` excludes it |
+| D | Minimum-risk fallback | Force a tight structure (e.g. set `Structure buffer` high, or find a signal whose swing is within the buffer) | SL falls back to `Entry ∓ 1.5×ATR`; Audit Mode `SL MODE` = `ATR FALLBACK`; signal still fires |
+| E | Maximum-risk rejection | Force risk > 2.5 ATR (e.g. set `Maximum risk` = 0.6) on an otherwise valid setup | **No signal** — no marker, no levels, no alert; Audit Mode `REASON` = `RISK TOO LARGE` |
+| F | R-based TP | On a valid BUY: `(TP1 − Entry)/Risk = 1.0`, `(TP2 − Entry)/Risk = 2.5` (mirror for SELL) | Exact ratios (Audit Mode `TP1 R` / `TP2 R` rows) |
+| G | Reload stability | After a signal, reload the chart | Entry, SL, TP1, TP2, RISK, R:R all unchanged |
+| H | Supported-timeframe matrix | Repeat A–G on 15m, 1H, and 4H; re-verify blocked timeframes (5m/30m/2H/…) show no levels | Same behavior on all three; blocked charts unchanged |
+| I | Alerts | Risk-rejected setup (test E) with alerts enabled; then a valid setup | Risk-rejected: **zero alerts**. Valid: exactly one alert at confirmed close |
+| J | UI cleanliness | Inspect the chart after a signal | Normal mode shows only the existing markers, score label, and latest Entry/SL/TP1/TP2 lines — no extra objects; panel gains only `RISK` and `R:R` rows |
 
 ## 3. Cross-check against built-in indicators
 
@@ -164,7 +179,9 @@ With invalid settings, the panel must show `CONFIG ERROR` (red header) with a re
 3. Set M15 EMA Fast = 21, Slow = 9 → reason `EMA fast >= slow`.
 4. Set all scoring weights to 0 → reason `all weights are 0`.
 5. Set Minimum Score = 200 with default weights (max 100) → reason `min score > max`.
-6. Restore defaults → the header returns to `MARKET` and signals resume.
+6. Set `Maximum risk (ATR)` = 0.5 and `Minimum risk (ATR)` = 0.6 (max ≤ min) → reason `risk config invalid`; signals suppressed.
+7. Set `TP2 R multiple` = 1.0 and `TP1 R multiple` = 1.5 (TP2 ≤ TP1) → reason `risk config invalid`; signals suppressed.
+8. Restore defaults → the header returns to `MARKET` and signals resume.
 
 Each change must take effect immediately after re-running the script on the chart.
 
