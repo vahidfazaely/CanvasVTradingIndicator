@@ -18,6 +18,7 @@ Date: 2026-08-17
 - **Panel:** the `H4 TREND` row now reflects the full regime (shows `NEUTRAL` when the slope is flat or separation is below the minimum). No new rows.
 - **Unchanged:** scoring model, Entry/SL/TP1/TP2 formulas, markers, levels, labels, alerts, TF policy (15m/1H/4H only), repaint methodology (single-line `request.security` ×7, `lookahead_off`, `barstate.isconfirmed`), config validation, all Pine build-compatibility constraints.
 - **No profitability claim** — requires backtesting.
+- **Build compatibility fix:** the bare `abs()` function is not available on the target Pine build (`Could not find function or function reference 'abs'`); the four new calculations now use `math.abs()`. Same values, no logic change.
 
 ## v2.4.0 — Signal-engine timeframe policy (15m / 1H / 4H only)
 

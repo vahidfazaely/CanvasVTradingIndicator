@@ -209,7 +209,7 @@ slopeUp = h4e50 > h4e50Prev
 slopeDn = h4e50 < h4e50Prev
 //--- 4H regime (HARD GATE): direction + strict slope + min separation.
 //--- All values are confirmed 4H candles (lookahead_off / close-gated).
-sep4HOk = abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100 >= min4hSep
+sep4HOk = math.abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100 >= min4hSep
 regimeUpOk = h4Bull and slopeUp and sep4HOk
 regimeDnOk = h4Bear and slopeDn and sep4HOk
 
@@ -234,7 +234,7 @@ setupGateUp = setupUp and gapUpExp
 setupGateDn = setupDn and gapDnExp
 //--- Candle quality: direction + minimum body (safe division)
 candleRange = high - low
-candleBodyPct = candleRange > 0 ? abs(close - open) / candleRange * 100 : 0.0
+candleBodyPct = candleRange > 0 ? math.abs(close - open) / candleRange * 100 : 0.0
 candleUpOk = close > open and candleBodyPct >= minBodyPct
 candleDnOk = close < open and candleBodyPct >= minBodyPct
 //--- ADX floor (was score-only; now also a hard gate)
@@ -243,7 +243,7 @@ adxGateOk = adxVal >= adxMin
 atrPct = atrVal / math.max(close, 1e-10) * 100
 volFloorOk = atrPct >= minVolPct
 //--- Chasing filter: price distance from EMA9 in ATR units
-entryDistAtr = abs(close - emaF) / math.max(atrVal, 1e-10)
+entryDistAtr = math.abs(close - emaF) / math.max(atrVal, 1e-10)
 chaseGateOk = entryDistAtr <= maxEntryDist
 
 //--------------------------------------------------------------
@@ -635,7 +635,7 @@ trendLbl = "H4 TREND"
 //--- Regime shown in the panel (stable values: previous closed 4H on the
 //--- 4H chart, last closed 4H elsewhere). NEUTRAL when the slope is flat
 //--- or the separation is below the minimum.
-panelSepOk = abs(panelE50 - panelE200) / math.max(panelE200, 1e-10) * 100 >= min4hSep
+panelSepOk = math.abs(panelE50 - panelE200) / math.max(panelE200, 1e-10) * 100 >= min4hSep
 panelRegUp = panelE50 > panelE200 and panelE50 > panelE50Prev and panelSepOk
 panelRegDn = panelE50 < panelE200 and panelE50 < panelE50Prev and panelSepOk
 trendTxt = panelRegUp ? "BULLISH" : panelRegDn ? "BEARISH" : "NEUTRAL"
