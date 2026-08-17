@@ -2,6 +2,22 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v3.4.1 — Observability: signal-decision context fields (Phase 4A)
+
+Date: 2026-08-17
+
+**Observability-only release. Trading logic is unchanged** — the signal decision is byte-identical to v3.4.0; the only difference is additional diagnostic output.
+
+- **H4 slope magnitude:** signed `(h4e50 − h4e50Prev)/h4e50Prev × 100` — the same confirmed 4H series the strict slope gate uses; measurement only (the gate is untouched).
+- **H4 separation magnitude:** `|EMA50−EMA200|/EMA200 × 100` — same formula as the 0.10% gate; measurement only.
+- **H4 EMA50 distance:** `|entry − h4e50|/ATR` at the signal — observation only, no new rejection rule.
+- **ATR volatility regime:** current ATR as a % of its own `ATR regime lookback` (new Diagnostics input, default 200) SMA, banded `LOW <80% · NORMAL 80–120% · HIGH 120–160% · EXTREME ≥160%`. Documented as a transparent ratio (not a true percentile); historical bars only (`ta.sma`), no future data.
+- **1H confirmation freshness:** entry-TF bars (and minutes) since the confirmed 1H EMA21-vs-EMA50 state last updated — uses the same `lookahead_off` 1H series the gates use, never the forming 1H candle. On a 15m chart it cycles 0–3 per 1H candle.
+- **Signal spacing:** bars/minutes since the previous logged signal (`N/A` for the first; tracked while the logger is on). No cooldown added.
+- **Resolution context:** every resolved signal records outcome bars + elapsed minutes, the H4 and 1H state at the resolution candle, ADX at resolution, and `ALIGNMENT INTACT/BROKEN` (whether 4H + 1H were still aligned with the trade). Strictly post-hoc — never feeds back into the signal decision. Outcome categories are unchanged (`SL FIRST / TP1 FIRST / TP2 FIRST / AMBIGUOUS / EXPIRED / SUPERSEDED`).
+- **Logger UI:** `— DECISION LOG —` gains `— CONTEXT —` (H4 SLOPE, H4 SEP, H4 EMA DIST, ATR REGIME, 1H AGE, SINCE SIG) and `— RESOLUTION —` (RESOLUTION, H4 EXIT, 1H EXIT, ALIGNMENT with green INTACT / red BROKEN) sections. `— DIAGNOSTIC STATS —` gains candidate averages (AVG SCORE, AVG H4 SLOPE, AVG H4 SEP, AVG H4 DIST, AVG ATR, AVG 1H AGE, AVG RES) and an `OUTCOMES` count row (`SL · TP1 · TP2 · AMB · EXP · SUP`). Normal chart and panel are untouched; all new output lives in debug mode.
+- **Unchanged (byte-verified vs v3.4.0):** `buySig`/`sellSig`, every gate, score formulas and thresholds, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all 7 `request.security` calls (`lookahead_off`), repaint protection, frozen signal state, outcome classification, trading alerts, `alertcondition`s, and every Pine build-compatibility constraint. MT5 code untouched. Not a backtest — data collection only.
+
 ## v3.4.0 — UI/UX cleanup: simplified color system + compact panel
 
 Date: 2026-08-17

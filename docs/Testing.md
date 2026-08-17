@@ -70,7 +70,7 @@ Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejec
 | 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
 | 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
 
-Restore defaults after each test (panel shows `v3.4.0`).
+Restore defaults after each test (panel shows `v3.4.1`).
 
 ## 2c. Signal Decision Logger / outcome logger tests (v3.3.0)
 
@@ -125,6 +125,32 @@ v3.4.0 changes colors and layout only. Verify no trading behavior changed and th
 | H | Debug tables | Enable `Signal Decision Logger` | DECISION LOG / GATE STATUS / STATS render with PASS = green, FAIL = red, N/A + context = silver; no lime/teal/fuchsia anywhere |
 | I | Logic unchanged | Compare signals on the same symbol/timeframe before and after loading v3.4.0 | Identical signal bars, scores, Entry/SL/TP1/TP2 prices, risk, R:R, and alerts — only colors/layout differ |
 | J | Reload | Reload the chart | Same markers/levels/panel; historical signals in the same place with identical values |
+
+## 2f. Phase 4A — Logger Observability Tests (v3.4.1)
+
+v3.4.1 adds **observation-only** context fields to the Decision Logger. Trading behavior must be identical to v3.4.0 — the only difference is additional diagnostic output. Definitions used below: **H4 slope %** = `(h4e50 − h4e50Prev)/h4e50Prev × 100`; **H4 sep %** = `|EMA50−EMA200|/EMA200 × 100`; **H4 EMA dist** = `|entry − h4e50|/ATR`; **ATR regime** = current ATR vs its `ATR regime lookback` (default 200) SMA → `LOW <80% · NORMAL 80–120% · HIGH 120–160% · EXTREME ≥160%`; **1H age** = entry-TF bars since the confirmed 1H state last updated (0 = fresh; on 15m cycles 0–3); **SINCE SIG** = bars since the previous logged signal (`N/A` for the first, logger-session scope); **resolution context** = outcome bars/time + H4/1H state at the resolution candle + `ALIGNMENT INTACT/BROKEN`.
+
+| # | Test | INPUT / CONDITION | EXPECTED LOGGER OUTPUT | EXPECTED TRADING BEHAVIOR |
+|---|---|---|---|---|
+| A | Normal BUY signal | Valid BUY on 15m, logger ON | DECISION `BUY`; CONTEXT rows populated (H4 SLOPE, H4 SEP, H4 EMA DIST, ATR REGIME, 1H AGE, SINCE SIG) | Signal fires exactly as v3.4.0 — no change |
+| B | Normal SELL signal | Valid SELL | Mirrored; CONTEXT rows populated | Unchanged |
+| C | Rejected candidate | A crossover rejected by any gate | REASON row = first failed gate; CONTEXT rows still populated for the event | Unchanged (no signal) |
+| D | Flat 4H slope | A candidate whose H4 EMA50 == previous (regime NEUTRAL) | `H4 SLOPE 0.000%`; GATE STATUS `4H SLOPE FAIL`; REASON `4H SLOPE` or `4H REGIME` | Rejected — identical to v3.4.0 |
+| E | Strong 4H slope | Strongly rising/falling confirmed H4 EMA50 | `H4 SLOPE` shows a signed magnitude (e.g. `+0.042%` / `-0.018%`) | Unchanged |
+| F | Small separation | 4H EMA50/200 separation below 0.10% | `H4 SEP` < 0.10% (e.g. `0.052%`); REASON `4H SEPARATION` | Rejected — unchanged |
+| G | Large separation | Separation well above the gate | `H4 SEP` shows the true magnitude (e.g. `0.184%`) | Unchanged |
+| H | High ATR regime | ATR well above its 200-bar average (news/expansion) | `ATR REGIME HIGH/EXTREME <nnn>%` | Signal may still fire — regime is observation only, **never a gate** |
+| I | Low ATR regime | ATR far below its average (dead market) | `ATR REGIME LOW <nn>%` | Signal may still fire — observation only |
+| J | Fresh 1H confirmation | 1H candle just updated (first 15m bar of a new 1H) | `1H AGE 0b 0m` | Unchanged |
+| K | Stale 1H confirmation | Last 15m bar before the next 1H boundary | `1H AGE 3b 45m` on a 15m chart | Unchanged |
+| L | First signal, no previous | Fresh session / no prior logged signal | `SINCE SIG N/A` | Unchanged |
+| M | Closely spaced signals | A second signal shortly after the first | `SINCE SIG` shows the real gap in bars/min (e.g. `18b 270m`) | Unchanged — no cooldown added |
+| N | TP resolution | A signal resolves at TP1 or TP2 | RESOLUTION section: outcome + bars/time; `ALIGNMENT` = state at resolution | Outcome classification identical to v3.4.0 |
+| O | SL resolution | A signal resolves at SL | `OUTCOME SL FIRST`, `RESOLUTION <n>b <m>m`, H4 EXIT / 1H EXIT rows populated | Outcome classification identical |
+| P | Expired / superseded | Window elapses, or a newer signal replaces an unresolved one | `EXPIRED` / `SUPERSEDED` recorded with resolution context and outcome counts updated in STATS | Classification identical |
+| Q | Resolution after 1H flip | A signal that resolves after the 1H has flipped against it | `1H EXIT` opposite to entry, `ALIGNMENT BROKEN` (red) | Post-hoc only — the signal decision is unchanged |
+
+`— DIAGNOSTIC STATS —` additionally shows `AVG SCORE`, `AVG H4 SLOPE`, `AVG H4 SEP`, `AVG H4 DIST`, `AVG ATR`, `AVG 1H AGE`, `AVG RES`, and an `OUTCOMES` count row (`SL / TP1 / TP2 / AMB / EXP / SUP`) — all computed from logged events only.
 
 ## 2b. Position / risk engine tests (Phase 2, v3.1.0)
 

@@ -13,6 +13,7 @@
 //|  v3.2.0 - Signal Diagnostic Mode: event logger + outcome tracker   |
 //|  v3.3.0 - Signal Decision Logger: first-failure chain + statistics |
 //|  v3.4.0 - UI/UX cleanup: simplified color system + compact panel   |
+//|  v3.4.1 - Observability: logger context fields (diagnostic only)  |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -45,7 +46,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v3.4.0"
+VERSION = "v3.4.1"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -917,6 +918,14 @@ var bool   devGateVol   = false
 var bool   devGateChase = false
 var bool   devGateRisk  = false
 var bool   devGateScore = false
+//--- Phase 4A context snapshot (set with every logged event)
+var float  devH4SlopePct = na
+var float  devH4DistAtr  = na
+var float  devAtrVsAvg   = na
+var string devAtrRegime  = ""
+var int    devH1Age      = 0
+var int    devH1AgeMin   = 0
+var int    devSinceSig   = na
 
 //--- Active-signal outcome tracking (one at a time; observational)
 var bool   trActive  = false
@@ -958,6 +967,73 @@ var int stOpt = 0
 var int stRisk = 0
 var int stScore = 0
 
+//==============================================================
+// PHASE 4A OBSERVABILITY MEASUREMENTS (v3.4.1) - observation only
+//  New diagnostic fields capture market CONTEXT around candidates
+//  and signal resolution. NONE of these values feed back into any
+//  gate, score, or signal - pure data collection for the BTCUSD
+//  15M study. No new request.security calls are used; every input
+//  below is the engine's existing confirmed series.
+//==============================================================
+//--- 4.1 H4 slope magnitude: % change of the previous confirmed
+//--- H4 EMA50 (same series the strict slope gate uses; measurement)
+h4SlopePct = (h4e50 - h4e50Prev) / math.max(h4e50Prev, 1e-10) * 100
+//--- 4.2 H4 EMA50/EMA200 separation magnitude (% of EMA200) - same
+//--- formula the 0.10% regime gate uses; measurement only
+h4SepPct   = math.abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100
+//--- 4.3 Price distance from the 4H EMA50 at the entry, in ATR units
+//--- (diagnostic only; NOT a rejection rule)
+h4EmaDistAtr = math.abs(entry - h4e50) / math.max(atrVal, 1e-10)
+//--- 4.4 ATR volatility regime: current ATR vs its own N-bar SMA.
+//--- TRANSPARENT RATIO (not a true percentile): ATR as a % of its
+//--- average over the window. Regime bands: <80% LOW, 80-120%
+//--- NORMAL, 120-160% HIGH, >=160% EXTREME. Uses only historical
+//--- bars (ta.sma), no future data, no repaint. Diagnostic only.
+atrHistLen  = input.int(200, "ATR regime lookback (diagnostic)", minval = 20, maxval = 1000, group = grpDiag)
+atrAvg      = ta.sma(atrVal, atrHistLen)
+atrVsAvg    = atrVal / math.max(atrAvg, 1e-10) * 100
+atrRegimeTxt = atrVsAvg < 80 ? "LOW" : atrVsAvg < 120 ? "NORMAL" : atrVsAvg < 160 ? "HIGH" : "EXTREME"
+//--- 4.5 1H confirmation freshness: entry-TF bars since the last 1H
+//--- confirmation-state change (0 = the 1H just updated; on a 15m
+//--- chart this cycles 0-3 per 1H candle). Uses the SAME confirmed
+//--- 1H series the gates use (h1FastV/h1SlowV) - never the forming
+//--- 1H candle. Documented ambiguity: "state change" = the last bar
+//--- on which the confirmed 1H EMA21-vs-EMA50 state updated.
+var int    h1AgeBars = 0
+var string h1AgeDir  = "FLAT"
+h1DirNow  = h1FastV > h1SlowV ? "UP" : h1FastV < h1SlowV ? "DN" : "FLAT"
+if h1DirNow != h1AgeDir
+    h1AgeDir := h1DirNow
+    h1AgeBars := 0
+else
+    h1AgeBars := h1AgeBars + 1
+h1AgeMin  = h1AgeBars * tfSec / 60
+//--- 4.6 Bars since the previous accepted signal (logger session only)
+var int prevSigBar = na
+//--- 4.7/4.8 Resolution-context snapshot (set at the resolution candle;
+//--- strictly post-hoc, never feeds back into the signal decision)
+var string resH4    = ""
+var string resH1    = ""
+var string resAdx   = ""
+var string resAlign = ""
+var int    resBars  = 0
+var int    resTime  = na
+//--- Aggregate accumulators for the extended DIAGNOSTIC STATS table
+var float stSumScore = 0.0
+var float stSumSlope = 0.0
+var float stSumSep   = 0.0
+var float stSumDist  = 0.0
+var float stSumAtr   = 0.0
+var float stSumAge   = 0.0
+var float stSumRes   = 0.0
+var int   stResCnt   = 0
+var int   stOutSl  = 0
+var int   stOutTp1 = 0
+var int   stOutTp2 = 0
+var int   stOutAmb = 0
+var int   stOutExp = 0
+var int   stOutSup = 0
+
 //--- Granular first-failed-gate reason, derived ONLY from the
 //--- existing gate booleans (observation, not a reimplementation)
 diagReasonUp = not regimeUpOk ? (not h4Bull ? "4H REGIME" : not slopeUp ? "4H SLOPE" : "4H SEPARATION") : not h1ConfUp ? "1H STRUCTURE" : not h1MomUp ? "1H MOMENTUM" : not setupGateUp ? (not (emaF > emaS) ? "ENTRY STRUCTURE" : not (close >= emaF) ? "ENTRY POSITION" : "EMA EXPANSION") : not crossUp ? "NO TRIGGER" : not candleUpOk ? (close <= open ? "CANDLE DIRECTION" : "CANDLE BODY") : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not buyGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : buyScore < minScore ? "SCORE" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
@@ -997,6 +1073,14 @@ if decisionLogger and isCandidateUp
     devDistAtr  := entryDistAtr
     devQual     := (adxGateOk ? "ADX " + str.tostring(adxVal, "#.##") + " ✓" : "ADX " + str.tostring(adxVal, "#.##") + " ✗") + " · " + (volFloorOk ? "ATR% " + str.tostring(atrPct, "#.##") + " ✓" : "ATR% ✗") + " · " + (chaseGateOk ? "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✓" : "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✗")
     devScoreBrk := "T" + str.tostring(h4Bull ? trendWeight : 0) + " H" + str.tostring(h1ConfUp ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeUp ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
+    //--- Phase 4A context measurements (observation only)
+    devH4SlopePct := h4SlopePct
+    devH4DistAtr  := h4EmaDistAtr
+    devAtrVsAvg   := atrVsAvg
+    devAtrRegime  := atrRegimeTxt
+    devH1Age      := h1AgeBars
+    devH1AgeMin   := h1AgeMin
+    devSinceSig   := na(prevSigBar) ? na : bar_index - prevSigBar
     devEntryPx  := entry
     devSL       := slBuy
     devTP1      := tp1Buy
@@ -1081,14 +1165,32 @@ if decisionLogger and isCandidateUp
         else if diagReasonUp == "SCORE"
             stScore := stScore + 1
 
+    //--- Phase 4A aggregate accumulators (candidate-level context)
+    stSumScore := stSumScore + buyScore
+    stSumSlope := stSumSlope + h4SlopePct
+    stSumSep   := stSumSep + devSep
+    stSumDist  := stSumDist + h4EmaDistAtr
+    stSumAtr   := stSumAtr + atrVsAvg
+    stSumAge   := stSumAge + h1AgeBars
+
     //--- A newer signal finalizes an older still-unresolved one
     if buySig and trActive
         trOutcome := "SUPERSEDED"
         trFinalR  := (close - trEntry) / math.max(trRisk, 1e-10)
-        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b) MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
+        resH4     := h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
+        resH1     := h1FastV > h1SlowV ? "BULLISH" : h1FastV < h1SlowV ? "BEARISH" : "NEUTRAL"
+        resAdx    := str.tostring(adxVal, "#.##")
+        resBars   := trElapsed
+        resTime   := time
+        resAlign  := (trDir == "BUY" and h4Bull and h1ConfUp) or (trDir == "SELL" and h4Bear and h1ConfDn) ? "INTACT" : "BROKEN"
+        stOutSup  := stOutSup + 1
+        stResCnt  := stResCnt + 1
+        stSumRes  := stSumRes + trElapsed
+        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m) H4 " + resH4 + " H1 " + resH1 + " ALIGN " + resAlign + " MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
         if array.size(outLog) > 20
             array.remove(outLog, 0)
     if buySig
+        prevSigBar := bar_index
         trActive  := true
         trBar     := bar_index
         trTime    := time
@@ -1145,6 +1247,14 @@ if decisionLogger and isCandidateDn
     devDistAtr  := entryDistAtr
     devQual     := (adxGateOk ? "ADX " + str.tostring(adxVal, "#.##") + " ✓" : "ADX " + str.tostring(adxVal, "#.##") + " ✗") + " · " + (volFloorOk ? "ATR% " + str.tostring(atrPct, "#.##") + " ✓" : "ATR% ✗") + " · " + (chaseGateOk ? "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✓" : "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✗")
     devScoreBrk := "T" + str.tostring(h4Bear ? trendWeight : 0) + " H" + str.tostring(h1ConfDn ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeDn ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
+    //--- Phase 4A context measurements (observation only)
+    devH4SlopePct := h4SlopePct
+    devH4DistAtr  := h4EmaDistAtr
+    devAtrVsAvg   := atrVsAvg
+    devAtrRegime  := atrRegimeTxt
+    devH1Age      := h1AgeBars
+    devH1AgeMin   := h1AgeMin
+    devSinceSig   := na(prevSigBar) ? na : bar_index - prevSigBar
     devEntryPx  := entry
     devSL       := slSell
     devTP1      := tp1Sell
@@ -1229,14 +1339,32 @@ if decisionLogger and isCandidateDn
         else if diagReasonDn == "SCORE"
             stScore := stScore + 1
 
+    //--- Phase 4A aggregate accumulators (candidate-level context)
+    stSumScore := stSumScore + sellScore
+    stSumSlope := stSumSlope + h4SlopePct
+    stSumSep   := stSumSep + devSep
+    stSumDist  := stSumDist + h4EmaDistAtr
+    stSumAtr   := stSumAtr + atrVsAvg
+    stSumAge   := stSumAge + h1AgeBars
+
     //--- A newer signal finalizes an older still-unresolved one
     if sellSig and trActive
         trOutcome := "SUPERSEDED"
         trFinalR  := (trEntry - close) / math.max(trRisk, 1e-10)
-        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b) MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
+        resH4     := h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
+        resH1     := h1FastV > h1SlowV ? "BULLISH" : h1FastV < h1SlowV ? "BEARISH" : "NEUTRAL"
+        resAdx    := str.tostring(adxVal, "#.##")
+        resBars   := trElapsed
+        resTime   := time
+        resAlign  := (trDir == "BUY" and h4Bull and h1ConfUp) or (trDir == "SELL" and h4Bear and h1ConfDn) ? "INTACT" : "BROKEN"
+        stOutSup  := stOutSup + 1
+        stResCnt  := stResCnt + 1
+        stSumRes  := stSumRes + trElapsed
+        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m) H4 " + resH4 + " H1 " + resH1 + " ALIGN " + resAlign + " MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
         if array.size(outLog) > 20
             array.remove(outLog, 0)
     if sellSig
+        prevSigBar := bar_index
         trActive  := true
         trBar     := bar_index
         trTime    := time
@@ -1300,7 +1428,26 @@ if decisionLogger and trActive and isConfirmed and bar_index > trBar
             trFinalR  := trDir == "BUY" ? (close - trEntry) / math.max(trRisk, 1e-10) : (trEntry - close) / math.max(trRisk, 1e-10)
             trActive  := false
     if not trActive
-        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> " + trOutcome + " (" + str.tostring(trElapsed) + "b) MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R R " + (na(trFinalR) ? "--" : str.tostring(trFinalR, "#.##")))
+        //--- Phase 4A resolution context (post-hoc; never feeds back)
+        resH4    := h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
+        resH1    := h1FastV > h1SlowV ? "BULLISH" : h1FastV < h1SlowV ? "BEARISH" : "NEUTRAL"
+        resAdx   := str.tostring(adxVal, "#.##")
+        resBars  := trElapsed
+        resTime  := time
+        resAlign := (trDir == "BUY" and h4Bull and h1ConfUp) or (trDir == "SELL" and h4Bear and h1ConfDn) ? "INTACT" : "BROKEN"
+        stResCnt := stResCnt + 1
+        stSumRes := stSumRes + trElapsed
+        if trOutcome == "SL FIRST"
+            stOutSl := stOutSl + 1
+        else if trOutcome == "TP1 FIRST"
+            stOutTp1 := stOutTp1 + 1
+        else if trOutcome == "TP2 FIRST"
+            stOutTp2 := stOutTp2 + 1
+        else if trOutcome == "AMBIGUOUS"
+            stOutAmb := stOutAmb + 1
+        else if trOutcome == "EXPIRED"
+            stOutExp := stOutExp + 1
+        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> " + trOutcome + " (" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m) H4 " + resH4 + " H1 " + resH1 + " ALIGN " + resAlign + " MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R R " + (na(trFinalR) ? "--" : str.tostring(trFinalR, "#.##")))
         if array.size(outLog) > 20
             array.remove(outLog, 0)
 
@@ -1433,7 +1580,7 @@ if decisionLogger
                 table.cell(diagTbl, 0, i + 1, "", text_color = color.silver, text_size = size.small)
 
     if na(diagDetTbl)
-        diagDetTbl := table.new(position.top_right, 2, 17, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        diagDetTbl := table.new(position.top_right, 2, 29, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Latest-event detail (built from the frozen snapshots)
     hasEv = not na(devTime)
@@ -1451,6 +1598,18 @@ if decisionLogger
     trackTxt   = trActive ? str.tostring(trElapsed) + "/" + str.tostring(outcomeBars) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R" : na(trFinalR) ? "—" : str.tostring(trElapsed) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R"
     hitsTxt    = (trActive or not na(trFinalR)) ? (trTp1Hit ? "TP1 HIT" : "TP1 NOT HIT") + " · " + (trTp2Hit ? "TP2 HIT" : "TP2 NOT HIT") + " · " + (trSlHit ? "SL HIT" : "SL NOT HIT") : "—"
     lastOutTxt = array.size(outLog) > 0 ? array.get(outLog, array.size(outLog) - 1) : "—"
+    //--- Phase 4A context display (frozen event snapshot + resolution)
+    devSlopeTxt  = hasEv ? (devH4SlopePct > 0 ? "+" : "") + str.tostring(devH4SlopePct, "#.###") + "%" : "—"
+    devSepTxt    = hasEv ? str.tostring(devSep, "#.###") + "%" : "—"
+    devDistTxt   = hasEv ? str.tostring(devH4DistAtr, "#.##") + " ATR" : "—"
+    devAtrTxt    = hasEv ? devAtrRegime + " " + str.tostring(devAtrVsAvg, "#") + "%" : "—"
+    devAgeTxt    = hasEv ? str.tostring(devH1Age) + "b " + str.tostring(devH1AgeMin, "#") + "m" : "—"
+    devSinceTxt  = hasEv ? (na(devSinceSig) ? "N/A" : str.tostring(devSinceSig) + "b " + str.tostring(devSinceSig * tfSec / 60, "#") + "m") : "—"
+    resTxt       = resBars > 0 ? str.tostring(resBars) + "b " + str.tostring(resBars * tfSec / 60, "#") + "m" : "—"
+    resH4Txt     = resH4 == "" ? "—" : resH4
+    resH1Txt     = resH1 == "" ? "—" : resH1
+    resAlignTxt  = resAlign == "" ? "—" : resAlign
+    resAlignCol  = resAlign == "INTACT" ? color.green : resAlign == "BROKEN" ? color.red : color.silver
 
     table.cell(diagDetTbl, 0, 0, "— DECISION LOG —", text_color = color.white, text_size = size.small)
     table.cell(diagDetTbl, 1, 0, "", text_color = color.white, text_size = size.small)
@@ -1486,6 +1645,32 @@ if decisionLogger
     table.cell(diagDetTbl, 1, 15, hitsTxt, text_color = color.silver, text_size = size.small)
     table.cell(diagDetTbl, 0, 16, "OUTCOME", text_color = color.silver, text_size = size.small)
     table.cell(diagDetTbl, 1, 16, trActive ? "TRACKING…" : lastOutTxt, text_color = color.silver, text_size = size.small)
+    //--- Phase 4A market context (observation only)
+    table.cell(diagDetTbl, 0, 17, "— CONTEXT —", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 17, "", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 18, "H4 SLOPE", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 18, devSlopeTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 19, "H4 SEP", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 19, devSepTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 20, "H4 EMA DIST", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 20, devDistTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 21, "ATR REGIME", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 21, devAtrTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 22, "1H AGE", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 22, devAgeTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 23, "SINCE SIG", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 23, devSinceTxt, text_color = color.silver, text_size = size.small)
+    //--- Phase 4A resolution context (post-hoc)
+    table.cell(diagDetTbl, 0, 24, "— RESOLUTION —", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 24, "", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 25, "RESOLUTION", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 25, resTxt, text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 26, "H4 EXIT", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 26, resH4Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 27, "1H EXIT", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 27, resH1Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 28, "ALIGNMENT", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 28, resAlignTxt, text_color = resAlignCol, text_size = size.small)
 
     //--- Gate status table (latest candidate's first-failure chain)
     if na(gateTbl)
@@ -1541,9 +1726,17 @@ if decisionLogger
     table.cell(gateTbl, 0, 16, "DECISION", text_color = color.silver, text_size = size.small)
     table.cell(gateTbl, 1, 16, hasEv ? devDecision : "N/A", text_color = hasEv ? (devDecision == "REJECTED" ? color.red : color.green) : color.silver, text_size = size.small)
 
-    //--- Decision statistics (which filter kills the most setups)
+    //--- Decision statistics (which filter kills the most setups) +
+    //--- Phase 4A candidate-level averages (observation only)
+    avgScore = stCand > 0 ? stSumScore / stCand : na
+    avgSlope = stCand > 0 ? stSumSlope / stCand : na
+    avgSep   = stCand > 0 ? stSumSep / stCand : na
+    avgDist  = stCand > 0 ? stSumDist / stCand : na
+    avgAtr   = stCand > 0 ? stSumAtr / stCand : na
+    avgAge   = stCand > 0 ? stSumAge / stCand : na
+    avgRes   = stResCnt > 0 ? stSumRes / stResCnt : na
     if na(statsTbl)
-        statsTbl := table.new(position.top_right, 2, 19, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        statsTbl := table.new(position.top_right, 2, 27, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
     table.cell(statsTbl, 0, 0, "— DIAGNOSTIC STATS —", text_color = color.white, text_size = size.small)
     table.cell(statsTbl, 1, 0, "", text_color = color.white, text_size = size.small)
     table.cell(statsTbl, 0, 1, "CANDIDATES", text_color = color.silver, text_size = size.small)
@@ -1582,6 +1775,22 @@ if decisionLogger
     table.cell(statsTbl, 1, 17, stScore > 0 ? str.tostring(stScore) : "—", text_color = color.silver, text_size = size.small)
     table.cell(statsTbl, 0, 18, "OPTIONAL FILTERS", text_color = color.silver, text_size = size.small)
     table.cell(statsTbl, 1, 18, stOpt > 0 ? str.tostring(stOpt) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 19, "AVG SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 19, na(avgScore) ? "—" : str.tostring(avgScore, "#.#"), text_color = color.white, text_size = size.small)
+    table.cell(statsTbl, 0, 20, "AVG H4 SLOPE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 20, na(avgSlope) ? "—" : (avgSlope > 0 ? "+" : "") + str.tostring(avgSlope, "#.###") + "%", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 21, "AVG H4 SEP", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 21, na(avgSep) ? "—" : str.tostring(avgSep, "#.###") + "%", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 22, "AVG H4 DIST", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 22, na(avgDist) ? "—" : str.tostring(avgDist, "#.##") + " ATR", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 23, "AVG ATR", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 23, na(avgAtr) ? "—" : str.tostring(avgAtr, "#") + "% of avg", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 24, "AVG 1H AGE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 24, na(avgAge) ? "—" : str.tostring(avgAge, "#.#") + "b", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 25, "AVG RES", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 25, na(avgRes) ? "—" : str.tostring(avgRes, "#.#") + "b", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 26, "OUTCOMES", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 26, "SL " + str.tostring(stOutSl) + " · TP1 " + str.tostring(stOutTp1) + " · TP2 " + str.tostring(stOutTp2) + " · AMB " + str.tostring(stOutAmb) + " · EXP " + str.tostring(stOutExp) + " · SUP " + str.tostring(stOutSup), text_color = color.silver, text_size = size.small)
 else
     if not na(diagTbl)
         table.delete(diagTbl)
