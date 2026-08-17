@@ -5,6 +5,7 @@
 //|  v2.0.1 - hardening release (validation + repaint proof)        |
 //|  v2.0.2 - renamed to CanvasV MTF Signal (display name only)      |
 //|  v2.1.0 - visual/UI refinement (markers, panel, level labels)    |
+//|  v2.2.0 - Signal Audit Mode (debug/diagnostic, presentation only)  |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend filter : H4 EMA 50/200 + EMA 50 slope (closed H4 only)  |
@@ -31,7 +32,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v2.1.0"
+VERSION = "v2.2.0"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -84,6 +85,7 @@ showEntryEMAs = input.bool(true, "Show Entry EMA 9/21",  group = grpVis)
 showMarkers  = input.bool(true, "Show BUY/SELL markers", group = grpVis)
 showLevels   = input.bool(true, "Show Entry/SL/TP1/TP2 lines", group = grpVis)
 showSigLabels = input.bool(true, "Show signal labels",          group = grpVis)
+auditMode     = input.bool(false, "Signal Audit Mode (debug)",  group = grpVis)
 
 showPanel = input.bool(true, "Show info panel", group = grpPanel)
 
@@ -256,6 +258,28 @@ var float lastSigHigh = na
 var float lastSigLow  = na
 var int   lastSigBar  = na
 
+//--- Audit snapshots (set ONLY at signal time; presentation/debug only)
+var float  audEma50      = na
+var float  audEma200     = na
+var float  audEma50Prev  = na
+var float  audEmaF       = na
+var float  audEmaS       = na
+var float  audAdx        = na
+var float  audAdxMin     = na
+var bool   audTrendOk    = false
+var bool   audSlopeOk    = false
+var bool   audCrossOk    = false
+var bool   audAdxOk      = false
+var bool   audVolOk      = false
+var bool   audVolConfOk  = false
+var int    audTrendPts   = 0
+var int    audSlopePts   = 0
+var int    audCrossPts   = 0
+var int    audAdxPts     = 0
+var int    audVolPts     = 0
+var int    audVolConfPts = 0
+var datetime audBarTime  = na
+
 //--------------------------------------------------------------
 // On a new confirmed BUY / STRONG BUY: remember + redraw levels
 //--------------------------------------------------------------
@@ -270,6 +294,28 @@ if buySig
     lastSigHigh := high
     lastSigLow  := low
     lastSigBar  := bar_index
+
+    //--- Audit snapshots: exact values/conditions that produced this signal
+    audEma50     := h4e50
+    audEma200    := h4e200
+    audEma50Prev := h4e50Prev
+    audEmaF      := emaF
+    audEmaS      := emaS
+    audAdx       := adxVal
+    audAdxMin    := adxMin
+    audTrendOk   := h4Bull
+    audSlopeOk   := slopeUp
+    audCrossOk   := crossUp
+    audAdxOk     := adxPass
+    audVolOk     := volOk
+    audVolConfOk := volConfOk
+    audTrendPts  := h4Bull     ? trendWeight : 0
+    audSlopePts  := slopeUp    ? slopeWeight : 0
+    audCrossPts  := crossUp    ? momWeight   : 0
+    audAdxPts    := adxPass    ? adxWeight   : 0
+    audVolPts    := volOk      ? atrVolWeight : 0
+    audVolConfPts := volConfOk ? volWeight   : 0
+    audBarTime   := time
 
     //--- Remove the previous signal's levels (na-safe: a signal may
     //--- have fired while showLevels was off, leaving na ids)
@@ -320,6 +366,28 @@ if sellSig
     lastSigHigh := high
     lastSigLow  := low
     lastSigBar  := bar_index
+
+    //--- Audit snapshots: exact values/conditions that produced this signal
+    audEma50     := h4e50
+    audEma200    := h4e200
+    audEma50Prev := h4e50Prev
+    audEmaF      := emaF
+    audEmaS      := emaS
+    audAdx       := adxVal
+    audAdxMin    := adxMin
+    audTrendOk   := h4Bear
+    audSlopeOk   := slopeDn
+    audCrossOk   := crossDn
+    audAdxOk     := adxPass
+    audVolOk     := volOk
+    audVolConfOk := volConfOk
+    audTrendPts  := h4Bear     ? trendWeight : 0
+    audSlopePts  := slopeDn    ? slopeWeight : 0
+    audCrossPts  := crossDn    ? momWeight   : 0
+    audAdxPts    := adxPass    ? adxWeight   : 0
+    audVolPts    := volOk      ? atrVolWeight : 0
+    audVolConfPts := volConfOk ? volWeight   : 0
+    audBarTime   := time
 
     //--- Remove the previous signal's levels (na-safe)
     if not na(lnEntry)
@@ -507,3 +575,86 @@ else
     if not na(pan)
         table.delete(pan)
         pan := na
+
+//--------------------------------------------------------------
+// Signal Audit table (Signal Audit Mode = true)
+// Debug/diagnostic only: shows the EXACT snapshotted values and
+// conditions that produced the latest confirmed signal. When the
+// mode is off this block is inactive and the chart is unchanged.
+//--------------------------------------------------------------
+audDirTxt   = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
+              lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
+audSigCol   = lastSigType > 0 ? color.lime : lastSigType < 0 ? color.red : color.silver
+audHas      = not na(lastSigBar)
+audScoreTxt = audHas ? str.tostring(lastScore) + " / " + str.tostring(lastMax) : "—"
+
+//--- Pass/fail text per component (exact snapshotted contributions)
+audTrendTxt   = audHas ? (audTrendOk   ? "✓ PASS  +" + str.tostring(audTrendPts)   : "✗ FAIL  +" + str.tostring(audTrendPts))   : "—"
+audSlopeTxt   = audHas ? (audSlopeOk   ? "✓ PASS  +" + str.tostring(audSlopePts)   : "✗ FAIL  +" + str.tostring(audSlopePts))   : "—"
+audCrossTxt   = audHas ? (audCrossOk   ? "✓ PASS  +" + str.tostring(audCrossPts)   : "✗ FAIL  +" + str.tostring(audCrossPts))   : "—"
+audAdxTxt     = audHas ? (audAdxOk     ? "✓ PASS  +" + str.tostring(audAdxPts)     : "✗ FAIL  +" + str.tostring(audAdxPts))     : "—"
+audVolTxt     = audHas ? (audVolOk     ? "✓ PASS  +" + str.tostring(audVolPts)     : "✗ FAIL  +" + str.tostring(audVolPts))     : "—"
+audVolConfTxt = audHas ? (audVolConfOk ? "✓ PASS  +" + str.tostring(audVolConfPts) : "✗ FAIL  +" + str.tostring(audVolConfPts)) : "—"
+
+slopeDirTxt = audHas ? (audEma50 > audEma50Prev ? "rising" : audEma50 < audEma50Prev ? "falling" : "flat") : ""
+
+var table aud = na
+
+if auditMode
+    if na(aud)
+        aud := table.new(position.top_right, 2, 20, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+
+    //--- Header
+    table.cell(aud, 0, 0, "— SIGNAL AUDIT —", text_color = color.white,  text_size = size.small)
+    table.cell(aud, 1, 0, "",                  text_color = color.white,  text_size = size.small)
+    //--- Signal + score
+    table.cell(aud, 0, 1, "SIGNAL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 1, audDirTxt, text_color = audSigCol,   text_size = size.normal)
+    table.cell(aud, 0, 2, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 2, audScoreTxt, text_color = color.silver, text_size = size.normal)
+    //--- H4 trend
+    table.cell(aud, 0, 3, "H4 TREND", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 3, audTrendTxt, text_color = audHas ? (audTrendOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 4, "EMA50 / EMA200", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 4, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma200) ? "--" : str.tostring(audEma200, format.mintick)), text_color = color.silver, text_size = size.small)
+    //--- H4 slope
+    table.cell(aud, 0, 5, "H4 SLOPE", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 5, audSlopeTxt + (audHas ? "  (" + slopeDirTxt + ")" : ""), text_color = audHas ? (audSlopeOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 6, "EMA50 cur/prev", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 6, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma50Prev) ? "--" : str.tostring(audEma50Prev, format.mintick)), text_color = color.silver, text_size = size.small)
+    //--- Cross
+    table.cell(aud, 0, 7, "CROSS", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 7, audCrossTxt, text_color = audHas ? (audCrossOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 8, "EMA9 / EMA21", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 8, (na(audEmaF) ? "--" : str.tostring(audEmaF, format.mintick)) + " / " + (na(audEmaS) ? "--" : str.tostring(audEmaS, format.mintick)), text_color = color.silver, text_size = size.small)
+    //--- ADX
+    table.cell(aud, 0, 9, "ADX", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 9, audAdxTxt, text_color = audHas ? (audAdxOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 10, "ADX val / min", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 10, (na(audAdx) ? "--" : str.tostring(audAdx, "#.##")) + " / " + (na(audAdxMin) ? "--" : str.tostring(audAdxMin, "#.##")), text_color = color.silver, text_size = size.small)
+    //--- Volatility / volume (rows show a contribution only when the weight is enabled)
+    table.cell(aud, 0, 11, "VOLATILITY", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 11, atrVolWeight > 0 ? audVolTxt : "", text_color = audHas ? (audVolOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 12, "VOLUME", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 12, volWeight > 0 ? audVolConfTxt : "", text_color = audHas ? (audVolConfOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    //--- Total (exact existing score)
+    table.cell(aud, 0, 13, "TOTAL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 13, audScoreTxt, text_color = color.white, text_size = size.normal)
+    //--- Price levels (exact existing ATR levels)
+    table.cell(aud, 0, 14, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 14, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
+    table.cell(aud, 0, 15, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 15, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
+    table.cell(aud, 0, 16, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 16, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
+    table.cell(aud, 0, 17, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 17, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
+    //--- Signal bar
+    table.cell(aud, 0, 18, "BAR", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 18, syminfo.ticker + " " + timeframe.period + "  " + (na(audBarTime) ? "--" : str.tostring(audBarTime, format.timestamp)), text_color = color.silver, text_size = size.small)
+    table.cell(aud, 0, 19, "CONFIRMED", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 19, "YES - closed candle", text_color = color.lime, text_size = size.small)
+else
+    if not na(aud)
+        table.delete(aud)
+        aud := na

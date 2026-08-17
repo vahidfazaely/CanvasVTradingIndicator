@@ -2,6 +2,24 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v2.2.0 — Signal Audit Mode (debug/diagnostic)
+
+Date: 2026-08-17
+
+- New `Signal Audit Mode` input (Visuals group, **default off**). When off, the indicator behaves byte-for-byte identically to v2.1.0.
+- When on, a compact audit table below the info panel shows the **exact** values and conditions that produced the latest confirmed signal:
+  - SIGNAL (BUY / SELL / STRONG) and SCORE;
+  - H4 TREND (EMA50, EMA200, pass/fail, score contribution);
+  - H4 SLOPE (current and previous confirmed EMA50, rising/falling, pass/fail, contribution);
+  - CROSS (EMA9 / EMA21, pass/fail, contribution);
+  - ADX (value, configured minimum, pass/fail, contribution);
+  - VOLATILITY / VOLUME contributions when their weights are enabled;
+  - TOTAL (the exact existing score);
+  - ENTRY / SL / TP1 / TP2 (the exact existing ATR levels);
+  - BAR (symbol, timeframe, signal candle time, closed-candle confirmation).
+- All values are **snapshotted at signal time from the same series the signal logic used** — nothing is recalculated, no new conditions, no timing changes, no lookahead, no repaint. Historical signals unchanged.
+- Presentation only: signal conditions, scoring, HTF `request.security` methodology, ATR formulas, alert logic, and repaint protection are untouched (byte-level verified).
+
 ## v2.1.0 — Visual/UI refinement
 
 Date: 2026-08-17

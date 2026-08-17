@@ -81,6 +81,17 @@ Each of these must hide/show the corresponding element immediately:
 - `Show signal labels` (shows/hides the latest-signal `Score 75` label; the marker direction labels remain)
 - `Show Entry/SL/TP1/TP2 lines`
 - `Show info panel`
+- `Signal Audit Mode` (Visuals group, default off) — when on, an audit table appears below the info panel with the latest signal's exact values; when off, no audit table and the chart is identical to the default.
+
+## 6a. Signal Audit Mode verification
+
+1. Enable `Signal Audit Mode`, wait for a signal (or scroll to an existing one), and verify:
+   - SIGNAL/SCORE match the main panel's LAST SIGNAL values exactly.
+   - H4 TREND / SLOPE / CROSS / ADX pass-fail marks and score contributions sum to the displayed TOTAL, and TOTAL equals the panel score.
+   - ENTRY / SL / TP1 / TP2 match the on-chart level lines exactly.
+   - ADX and EMA values match the built-in indicators from §3.
+   - BAR shows symbol, timeframe, and the signal candle's time; CONFIRMED reads "YES - closed candle".
+2. Disable the mode: the audit table disappears and the chart looks exactly as before.
 
 Toggling level lines on must restore the **latest signal's** levels; toggling off must remove them.
 
