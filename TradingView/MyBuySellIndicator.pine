@@ -1,0 +1,433 @@
+//@version=5
+//+------------------------------------------------------------------+
+//|  MyBuySellIndicator - TradingView (Pine Script v5)               |
+//|  Multi-timeframe version of the MT5 Phase 2 logic               |
+//|                                                                  |
+//|  ARCHITECTURE                                                    |
+//|   Trend filter : H4 EMA 50/200 + EMA 50 slope (closed H4 only)  |
+//|   Entry        : current chart timeframe (EMA cross, ADX, ATR)  |
+//|   Signals      : confirmed on closed candles only, no repaint   |
+//|                                                                  |
+//|  When the chart timeframe is >= H4 (4H/6H/12H/D/W), the trend   |
+//|  is computed on the chart timeframe itself ("self mode") and    |
+//|  labelled in the panel.                                         |
+//|                                                                  |
+//|  H4 values use request.security with barmerge.lookahead_off,    |
+//|  i.e. the LAST CLOSED H4 candle - never the forming one.        |
+//+------------------------------------------------------------------+
+indicator("My Buy/Sell Scalper - MTF", shorttitle = "MyBS MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
+
+//--------------------------------------------------------------
+// Inputs
+//--------------------------------------------------------------
+grpTrend  = "=== Trend ==="
+grpEntry  = "=== Entry ==="
+grpAdx    = "=== ADX ==="
+grpRisk   = "=== ATR / Risk ==="
+grpScore  = "=== Signal Scoring ==="
+grpOpt    = "=== Optional Filters ==="
+grpVis    = "=== Visuals ==="
+grpPanel  = "=== Panel ==="
+grpAlerts = "=== Alerts ==="
+
+h4Fast = input.int(50,  "H4 EMA Fast", group = grpTrend)
+h4Slow = input.int(200, "H4 EMA Slow", group = grpTrend)
+
+entryFast = input.int(9,  "Entry EMA Fast", group = grpEntry)
+entrySlow = input.int(21, "Entry EMA Slow", group = grpEntry)
+
+adxWeight = input.int(25,     "ADX Weight (0 = off)", group = grpAdx)
+adxPeriod = input.int(14,     "ADX Period",           group = grpAdx)
+adxMin    = input.float(20.0, "ADX Minimum",          group = grpAdx)
+
+atrPeriod  = input.int(14,     "ATR Period",         group = grpRisk)
+atrSlMult  = input.float(1.5,  "ATR SL Multiplier",  group = grpRisk)
+atrTp1Mult = input.float(1.5,  "ATR TP1 Multiplier", group = grpRisk)
+atrTp2Mult = input.float(3.0,  "ATR TP2 Multiplier", group = grpRisk)
+
+trendWeight  = input.int(25, "Trend Weight (0 = off)",   group = grpScore)
+momWeight    = input.int(25, "Momentum Weight (0 = off)",group = grpScore)
+slopeWeight  = input.int(25, "Slope Weight (0 = off)",   group = grpScore)
+minScore     = input.int(75, "Minimum Signal Score",     group = grpScore)
+enableStrong = input.bool(true, "Enable STRONG signals", group = grpScore)
+strongScore  = input.int(100, "STRONG score threshold",  group = grpScore)
+
+enableSeparation = input.bool(false, "Require EMA separation",    group = grpOpt)
+minSeparation    = input.float(0.05, "Min EMA separation (%)",    group = grpOpt)
+enablePriceAbove = input.bool(false, "Require price on EMA21 side", group = grpOpt)
+enableHtfMom     = input.bool(false, "Require H4 momentum (price vs H4 EMA)", group = grpOpt)
+htfMomEma        = input.int(21,     "H4 momentum EMA period",    group = grpOpt)
+atrVolWeight     = input.int(0,      "Volatility Weight (0 = off)", group = grpOpt)
+atrMinPct        = input.float(0.05, "Min ATR (% of price)",      group = grpOpt)
+volWeight        = input.int(0,      "Volume Weight (0 = off)",   group = grpOpt)
+volPeriod        = input.int(20,     "Volume SMA period",         group = grpOpt)
+volMult          = input.float(1.0,  "Volume min ratio (vol >= SMA * ratio)", group = grpOpt)
+
+showH4EMAs   = input.bool(true, "Show H4 EMA 50/200",    group = grpVis)
+showEntryEMAs = input.bool(true, "Show Entry EMA 9/21",  group = grpVis)
+showMarkers  = input.bool(true, "Show BUY/SELL markers", group = grpVis)
+showLevels   = input.bool(true, "Show Entry/SL/TP1/TP2 lines", group = grpVis)
+
+showPanel = input.bool(true, "Show info panel", group = grpPanel)
+
+enableAlerts = input.bool(false, "EnableAlerts", group = grpAlerts)
+
+//--------------------------------------------------------------
+// Chart timeframe >= H4 ?  (self mode for the trend filter)
+//--------------------------------------------------------------
+isH4plus = timeframe.in_seconds(timeframe.period) >= 14400
+
+//--------------------------------------------------------------
+// HTF (H4) trend series - confirmed values only
+//--------------------------------------------------------------
+// Chart TF < H4 : H4 data of the LAST CLOSED H4 candle via
+//                 request.security(..., lookahead_off). The
+//                 [1] inside the H4 context shifts one H4 bar,
+//                 so h4e50Prev is the H4 candle before the last
+//                 closed one (used for the slope). Both values
+//                 stay constant during the whole H4 bar and
+//                 never repaint.
+// Chart TF >= H4: the chart's own series (self mode). Signals
+//                 are still gated by barstate.isconfirmed.
+[h4e50H, h4e50PrevH, h4e200H, h4momH] = request.security(syminfo.tickerid, "240",
+    [ta.ema(close, h4Fast), ta.ema(close, h4Fast)[1], ta.ema(close, h4Slow), ta.ema(close, htfMomEma)],
+    lookahead = barmerge.lookahead_off)
+
+//--- Chart-TF values (used when chart TF >= H4, self mode)
+h4e50S     = ta.ema(close, h4Fast)
+h4e50PrevS = ta.ema(close, h4Fast)[1]
+h4e200S    = ta.ema(close, h4Slow)
+h4momS     = ta.ema(close, htfMomEma)
+
+//--- Select the trend source by chart timeframe
+h4e50    = isH4plus ? h4e50S     : h4e50H
+h4e50Prev = isH4plus ? h4e50PrevS : h4e50PrevH
+h4e200   = isH4plus ? h4e200S    : h4e200H
+h4momEma = isH4plus ? h4momS     : h4momH
+
+//--------------------------------------------------------------
+// Entry series: current chart timeframe
+//--------------------------------------------------------------
+emaF  = ta.ema(close, entryFast)
+emaS  = ta.ema(close, entrySlow)
+//--- ADX main line: Pine has no ta.adx; ta.dmi returns [DI+, DI-, ADX]
+[diplus, diminus, adxVal] = ta.dmi(adxPeriod, adxPeriod)
+atrVal = ta.atr(atrPeriod)
+
+//--------------------------------------------------------------
+// Closed-candle discipline (live bar: true only at its close)
+//--------------------------------------------------------------
+isConfirmed = barstate.isconfirmed
+
+//--- H4 trend & slope (closed H4 values only)
+h4Bull  = h4e50 > h4e200
+h4Bear  = h4e50 < h4e200
+slopeUp = h4e50 >= h4e50Prev
+slopeDn = h4e50 <= h4e50Prev
+
+//--- Entry crossover (evaluated at bar close only)
+crossUp = ta.crossover(emaF, emaS)
+crossDn = ta.crossunder(emaF, emaS)
+adxPass = adxVal >= adxMin
+
+//--------------------------------------------------------------
+// Optional filters (all OFF by default, direction-aware)
+//--------------------------------------------------------------
+//--- EMA separation in the direction of the cross (%)
+sepBuyPct  = (emaF - emaS) / emaS * 100
+sepSellPct = (emaS - emaF) / emaF * 100
+sepBuyOk  = not enableSeparation or sepBuyPct  >= minSeparation
+sepSellOk = not enableSeparation or sepSellPct >= minSeparation
+
+//--- Price position vs the entry EMA 21
+priceUpOk = not enablePriceAbove or close >= emaS
+priceDnOk = not enablePriceAbove or close <= emaS
+
+//--- Higher-timeframe momentum: price vs H4 EMA(htfMomEma)
+htfUpOk = not enableHtfMom or close >= h4momEma
+htfDnOk = not enableHtfMom or close <= h4momEma
+
+//--- Volatility regime (ATR as % of price)
+atrPct   = atrVal / close * 100
+volOk    = not (atrVolWeight > 0) or atrPct >= atrMinPct
+
+//--- Volume confirmation (tick/real volume depending on feed)
+volSma    = ta.sma(volume, volPeriod)
+volConfOk = not (volWeight > 0) or volume >= volSma * volMult
+
+buyGate  = sepBuyOk  and priceUpOk and htfUpOk and volOk and volConfOk
+sellGate = sepSellOk and priceDnOk and htfDnOk and volOk and volConfOk
+
+//--------------------------------------------------------------
+// Scoring: configurable weights, default 25/25/25/25 (100 max)
+//--------------------------------------------------------------
+maxScore = trendWeight + momWeight + adxWeight + slopeWeight + atrVolWeight + volWeight
+
+buyScore  = (h4Bull   ? trendWeight : 0) + (crossUp  ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeUp  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
+sellScore = (h4Bear   ? trendWeight : 0) + (crossDn  ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeDn  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
+
+//--- BUY requires H4 bullish AND bullish crossover AND score >= minimum
+buySig  = isConfirmed and h4Bull and crossUp and buyGate  and buyScore  >= minScore
+//--- SELL requires H4 bearish AND bearish crossover AND score >= minimum
+sellSig = isConfirmed and h4Bear and crossDn and sellGate and sellScore >= minScore
+
+//--- STRONG signals: higher score threshold (configurable, optional)
+strongBuy  = buySig  and enableStrong and buyScore  >= strongScore
+strongSell = sellSig and enableStrong and sellScore >= strongScore
+
+//--------------------------------------------------------------
+// ATR risk levels (ATR of the closed signal candle)
+//--------------------------------------------------------------
+entry   = close
+slBuy   = entry - atrVal * atrSlMult
+tp1Buy  = entry + atrVal * atrTp1Mult
+tp2Buy  = entry + atrVal * atrTp2Mult
+slSell  = entry + atrVal * atrSlMult
+tp1Sell = entry - atrVal * atrTp1Mult
+tp2Sell = entry - atrVal * atrTp2Mult
+
+//--------------------------------------------------------------
+// EMAs on the chart (individually toggleable)
+//--------------------------------------------------------------
+plot(showH4EMAs    ? h4e50 : na, "H4 EMA 50",    color = color.new(color.dodgerblue, 0), linewidth = 1)
+plot(showH4EMAs    ? h4e200 : na, "H4 EMA 200",  color = color.new(color.orange, 0),      linewidth = 2)
+plot(showEntryEMAs ? emaF   : na, "Entry EMA 9", color = color.new(color.limegreen, 0),   linewidth = 1)
+plot(showEntryEMAs ? emaS   : na, "Entry EMA 21",color = color.new(color.magenta, 0),     linewidth = 1)
+
+//--------------------------------------------------------------
+// Markers: BUY / STRONG BUY / SELL / STRONG SELL
+//--------------------------------------------------------------
+plotshape(showMarkers and buySig  and not strongBuy,  "BUY",         style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0),  size = size.small)
+plotshape(showMarkers and strongBuy,                  "STRONG BUY",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.aqua, 0),   size = size.normal)
+plotshape(showMarkers and sellSig and not strongSell, "SELL",        style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small)
+plotshape(showMarkers and strongSell,                 "STRONG SELL", style = shape.triangledown, location = location.abovebar, color = color.new(color.orange, 0),size = size.normal)
+
+//--------------------------------------------------------------
+// Last-signal state (levels + panel)
+//--------------------------------------------------------------
+var line  lnEntry = na
+var line  lnSL    = na
+var line  lnTP1   = na
+var line  lnTP2   = na
+var label lblEntry = na
+var label lblSL    = na
+var label lblTP1   = na
+var label lblTP2   = na
+var int   lastSigType = 0       // 2 STRONG BUY, 1 BUY, -1 SELL, -2 STRONG SELL, 0 none
+var int   lastScore   = 0
+var int   lastMax     = 0
+var bool  lastTrendOk = false
+var bool  lastMomOk   = false
+var bool  lastAdxOk   = false
+var bool  lastSlopeOk = false
+var float lastEntry   = na
+var float lastSL      = na
+var float lastTP1     = na
+var float lastTP2     = na
+var int   lastSigBar  = na
+
+//--------------------------------------------------------------
+// On a new confirmed BUY / STRONG BUY: remember + redraw levels
+//--------------------------------------------------------------
+if buySig
+    hadPrevSignal = not na(lastSigBar)
+    lastSigType := strongBuy ? 2 : 1
+    lastScore   := buyScore
+    lastMax     := maxScore
+    lastTrendOk := h4Bull
+    lastMomOk   := crossUp
+    lastAdxOk   := adxPass
+    lastSlopeOk := slopeUp
+    lastEntry   := entry
+    lastSL      := slBuy
+    lastTP1     := tp1Buy
+    lastTP2     := tp2Buy
+    lastSigBar  := bar_index
+
+    if hadPrevSignal
+        line.delete(lnEntry)
+        line.delete(lnSL)
+        line.delete(lnTP1)
+        line.delete(lnTP2)
+        label.delete(lblEntry)
+        label.delete(lblSL)
+        label.delete(lblTP1)
+        label.delete(lblTP2)
+
+    if showLevels
+        lnEntry := line.new(bar_index, entry,  bar_index, entry,  extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
+        lnSL    := line.new(bar_index, slBuy,  bar_index, slBuy,  extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+        lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+        lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
+
+        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.tiny)
+        lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
+        lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
+        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.tiny)
+
+//--------------------------------------------------------------
+// On a new confirmed SELL / STRONG SELL: remember + redraw levels
+//--------------------------------------------------------------
+if sellSig
+    hadPrevSignal = not na(lastSigBar)
+    lastSigType := strongSell ? -2 : -1
+    lastScore   := sellScore
+    lastMax     := maxScore
+    lastTrendOk := h4Bear
+    lastMomOk   := crossDn
+    lastAdxOk   := adxPass
+    lastSlopeOk := slopeDn
+    lastEntry   := entry
+    lastSL      := slSell
+    lastTP1     := tp1Sell
+    lastTP2     := tp2Sell
+    lastSigBar  := bar_index
+
+    if hadPrevSignal
+        line.delete(lnEntry)
+        line.delete(lnSL)
+        line.delete(lnTP1)
+        line.delete(lnTP2)
+        label.delete(lblEntry)
+        label.delete(lblSL)
+        label.delete(lblTP1)
+        label.delete(lblTP2)
+
+    if showLevels
+        lnEntry := line.new(bar_index, entry,   bar_index, entry,   extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
+        lnSL    := line.new(bar_index, slSell,  bar_index, slSell,  extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+        lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+        lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
+
+        lblEntry := label.new(bar_index, entry,   "ENTRY " + str.tostring(entry,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.tiny)
+        lblSL    := label.new(bar_index, slSell,  "SL "    + str.tostring(slSell,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
+        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "   + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
+        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "   + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.tiny)
+
+//--------------------------------------------------------------
+// Live toggle of the level lines (showLevels changed)
+//--------------------------------------------------------------
+var bool prevShowLevels = na
+if na(prevShowLevels)
+    prevShowLevels := showLevels
+else if showLevels != prevShowLevels
+    prevShowLevels := showLevels
+    if not showLevels
+        if not na(lnEntry)
+            line.delete(lnEntry)
+        if not na(lnSL)
+            line.delete(lnSL)
+        if not na(lnTP1)
+            line.delete(lnTP1)
+        if not na(lnTP2)
+            line.delete(lnTP2)
+        if not na(lblEntry)
+            label.delete(lblEntry)
+        if not na(lblSL)
+            label.delete(lblSL)
+        if not na(lblTP1)
+            label.delete(lblTP1)
+        if not na(lblTP2)
+            label.delete(lblTP2)
+    else
+        if not na(lastSigBar)
+            lnEntry := line.new(lastSigBar, lastEntry,  lastSigBar, lastEntry,  extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
+            lnSL    := line.new(lastSigBar, lastSL,     lastSigBar, lastSL,     extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+            lnTP1   := line.new(lastSigBar, lastTP1,    lastSigBar, lastTP1,    extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+            lnTP2   := line.new(lastSigBar, lastTP2,    lastSigBar, lastTP2,    extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
+
+            lblEntry := label.new(lastSigBar, lastEntry,  "ENTRY " + str.tostring(lastEntry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.tiny)
+            lblSL    := label.new(lastSigBar, lastSL,     "SL "    + str.tostring(lastSL,     format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
+            lblTP1   := label.new(lastSigBar, lastTP1,    "TP1 "   + str.tostring(lastTP1,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
+            lblTP2   := label.new(lastSigBar, lastTP2,    "TP2 "   + str.tostring(lastTP2,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.tiny)
+
+//--------------------------------------------------------------
+// Alerts (once per confirmed signal, live bars only)
+//--------------------------------------------------------------
+if enableAlerts and buySig
+    sigTxtAlert = strongBuy ? "STRONG BUY" : "BUY"
+    alert(syminfo.ticker + " " + timeframe.period + ": " + sigTxtAlert +
+          " | Score: " + str.tostring(buyScore) + "/" + str.tostring(maxScore) +
+          " | Entry: " + str.tostring(entry, format.mintick) +
+          " | SL: " + str.tostring(slBuy, format.mintick) +
+          " | TP1: " + str.tostring(tp1Buy, format.mintick) +
+          " | TP2: " + str.tostring(tp2Buy, format.mintick),
+          alert.freq_once_per_bar_close)
+
+if enableAlerts and sellSig
+    sigTxtAlert = strongSell ? "STRONG SELL" : "SELL"
+    alert(syminfo.ticker + " " + timeframe.period + ": " + sigTxtAlert +
+          " | Score: " + str.tostring(sellScore) + "/" + str.tostring(maxScore) +
+          " | Entry: " + str.tostring(entry, format.mintick) +
+          " | SL: " + str.tostring(slSell, format.mintick) +
+          " | TP1: " + str.tostring(tp1Sell, format.mintick) +
+          " | TP2: " + str.tostring(tp2Sell, format.mintick),
+          alert.freq_once_per_bar_close)
+
+//--- Classic alert conditions (usable from the Alerts dialog)
+alertcondition(strongBuy,                  title = "MyBS STRONG BUY",  message = "MyBS STRONG BUY signal")
+alertcondition(buySig and not strongBuy,   title = "MyBS BUY",         message = "MyBS BUY signal")
+alertcondition(strongSell,                 title = "MyBS STRONG SELL", message = "MyBS STRONG SELL signal")
+alertcondition(sellSig and not strongSell, title = "MyBS SELL",        message = "MyBS SELL signal")
+
+//--------------------------------------------------------------
+// Info panel (upper-right), built from CLOSED data only
+//--------------------------------------------------------------
+trendLbl    = isH4plus ? "Trend (chart TF)" : "H4 Trend"
+trendTxt    = h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
+momentumTxt = emaF[1] > emaS[1] ? "BULLISH" : emaF[1] < emaS[1] ? "BEARISH" : "NEUTRAL"
+
+sigTxt = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
+         lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
+
+chkTrend = na(lastSigBar) ? "—" : (lastTrendOk ? "✓" : "✗")
+chkMom   = na(lastSigBar) ? "—" : (lastMomOk   ? "✓" : "✗")
+chkAdx   = na(lastSigBar) ? "—" : (lastAdxOk   ? "✓" : "✗")
+chkSlope = na(lastSigBar) ? "—" : (lastSlopeOk ? "✓" : "✗")
+
+sigColor = lastSigType > 0 ? color.lime : lastSigType < 0 ? color.red : color.silver
+
+var table pan = na
+
+if showPanel
+    if na(pan)
+        pan := table.new(position.top_right, 2, 14, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+
+    //--- Title
+    table.cell(pan, 0, 0, "MY INDICATOR", text_color = color.white,  text_size = size.small)
+    table.cell(pan, 1, 0, "",             text_color = color.white,  text_size = size.small)
+    //--- Symbol / Timeframe
+    table.cell(pan, 0, 1, "Symbol",    text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 1, syminfo.ticker, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 2, "Timeframe", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 2, timeframe.period, text_color = color.silver, text_size = size.small)
+    //--- Trend / Momentum / ADX / ATR
+    table.cell(pan, 0, 3, trendLbl, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 3, trendTxt + " " + chkTrend, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 4, "Momentum", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 4, momentumTxt + " " + chkMom, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 5, "ADX", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 5, str.tostring(adxVal[1], "#.##") + " " + chkAdx, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 6, "ATR", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 6, str.tostring(atrVal[1], "#.##"), text_color = color.silver, text_size = size.small)
+    //--- Score / Signal
+    table.cell(pan, 0, 7, "Score", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 7, str.tostring(lastScore) + "/" + str.tostring(lastMax), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 8, "Signal", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 8, sigTxt, text_color = sigColor, text_size = size.small)
+    //--- Levels of the latest confirmed signal
+    table.cell(pan, 0, 9,  "Entry", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 9,  na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 10, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 10, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 11, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 11, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 12, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 12, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.silver, text_size = size.small)
+    //--- Slope confirmation
+    table.cell(pan, 0, 13, "Slope", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 13, chkSlope, text_color = color.silver, text_size = size.small)
+else
+    if not na(pan)
+        table.delete(pan)
+        pan := na

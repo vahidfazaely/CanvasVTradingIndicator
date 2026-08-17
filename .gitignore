@@ -1,0 +1,13 @@
+# Workspace / editor data
+.freebuff/
+
+# Compiled MT5 artifacts (source lives in MT5/ only)
+*.ex5
+*.ex4
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
