@@ -14,15 +14,23 @@ If a compile error appears, note the line number and message; fixes are made in 
 
 ## 2. Timeframe matrix
 
-The indicator must be attached to every supported timeframe and produce sensible signals:
+The indicator uses a **fixed three-layer architecture** (4H trend + 1H confirmation + 15M entry). Attach it to each timeframe and verify:
 
-`1m, 3m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 12H, 1D, 1W`
+`1m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 12H, 1D`
 
-For each timeframe, verify:
+| Chart TF | Expected panel role | Expected status | Signals |
+|---|---|---|---|
+| 1m / 5m / 30m / 2H / 6H / 12H / 1D | the chart TF (e.g. `30m`) | `ENTRY SIGNALS DISABLED - M15 ONLY` (red) | **none** |
+| 15m | `M15 ENTRY` | `ENTRY ACTIVE` (green) | BUY/SELL/STRONG fire here |
+| 1H | `1H CONFIRMATION` | `CONTEXT - NO ENTRIES` | none |
+| 4H | `4H TREND` | `CONTEXT - NO ENTRIES` | none |
 
-- The panel shows the correct `Timeframe` value.
-- The trend field is labelled `H4 Trend` (chart TF < H4) or `Trend (chart TF)` (chart TF ≥ H4).
-- EMA/ADX/ATR values in the panel make sense for the timeframe.
+For each timeframe verify:
+
+- The panel shows the correct `TIMEFRAME` / `STATUS` values per the table above.
+- **Signals only ever appear on the 15m chart** — on every other timeframe the arrows must never print, even in history (the `isM15` gate disables them in code, not just visually).
+- On 15m: trend field reads `H4 TREND`, the `1H CONF` row shows the 1H EMA alignment, and ADX is the 15m value.
+- On 1H: the `1H CONF` row uses the chart series; on 4H: the trend uses the chart series (self mode) and the panel reads it with `[1]`.
 - Signals appear only on closed candles (see §4).
 
 ## 3. Cross-check against built-in indicators
@@ -33,8 +41,9 @@ Add TradingView's built-in indicators to a separate pane and compare with the pa
 |---|---|
 | ADX | `ADX (14)` — value should match the panel ADX |
 | ATR | `Average True Range (14)` — value should match |
-| Entry EMAs | `EMA 9` / `EMA 21` plotted on the chart |
-| H4 EMA 50/200 | Plot on an H4 chart and compare levels |
+| M15 EMAs | `EMA 9` / `EMA 21` plotted on a 15m chart |
+| 1H EMAs | `EMA 21` / `EMA 50` plotted on a 1H chart |
+| 4H EMA 50/200 | Plot on a 4H chart and compare levels |
 
 Any mismatch in value or timing indicates a bug.
 
@@ -48,18 +57,19 @@ This is the most important test. Procedure:
 4. Scroll far back in history: arrows on old bars must be stable across reloads.
 5. Switch the chart timeframe and switch back — signal placement must not change.
 
-The design guarantees: H4 values come from the **last completed H4 candle** (`lookahead_off`, step-constant during the forming H4 candle), entry signals are gated by `barstate.isconfirmed`, and no `lookahead_on` is used.
+The design guarantees: 4H values come from the **last completed 4H candle** (`lookahead_off`, step-constant during the forming 4H candle), the 1H confirmation comes from the **last closed 1H candle** (same methodology), entry signals are gated by `barstate.isconfirmed`, and no `lookahead_on` is used.
 
-### Specific HTF (H4) repaint test
+### Specific HTF (4H) repaint test
 
-1. Attach to an **M15** chart.
-2. Note the panel's H4 Trend field while an H4 candle is **forming**: it must read a fixed BULLISH/BEARISH value and **must not change** as M15 ticks arrive during that H4 candle.
-3. When the H4 candle closes (on the 4-hour grid boundary), the panel may flip — a legitimate update to the newly completed candle.
-4. The **H4 EMA 50/200 lines on the chart must be flat** throughout each forming H4 candle (step-constant), never sloping tick-by-tick.
-5. Scroll back across a previous H4 boundary: the H4 value shown on each M15 bar must equal the last H4 candle that completed at or before that bar's close time.
-6. Reload the chart: every historical H4 value and signal must be identical to the pre-reload state.
+1. Attach to an **15m** chart.
+2. Note the panel's H4 Trend field while a 4H candle is **forming**: it must read a fixed BULLISH/BEARISH value and **must not change** as 15m ticks arrive during that 4H candle.
+3. When the 4H candle closes (on the 4-hour grid boundary), the panel may flip — a legitimate update to the newly completed candle.
+4. The **4H EMA 50/200 lines on the chart must be flat** throughout each forming 4H candle (step-constant), never sloping tick-by-tick.
+5. Scroll back across a previous 4H boundary: the 4H value shown on each 15m bar must equal the last 4H candle that completed at or before that bar's close time.
+6. Reload the chart: every historical 4H value and signal must be identical to the pre-reload state.
+7. Repeat the same test for the **1H confirmation** layer: the `1H CONF` row and 1H EMA series must be fixed during each forming 1H candle and update only at 1H boundaries.
 
-A failure of steps 2, 4, or 6 is a repaint bug.
+A failure of steps 2, 4, 6, or 7 is a repaint bug.
 
 ## 5. Alerts
 
@@ -76,22 +86,22 @@ A failure of steps 2, 4, or 6 is a repaint bug.
 Each of these must hide/show the corresponding element immediately:
 
 - `Show H4 EMA 50/200`
-- `Show Entry EMA 9/21`
+- `Show M15 EMA 9/21`
 - `Show BUY/SELL markers`
 - `Show signal labels` (shows/hides the latest-signal `Score 75` label; the marker direction labels remain)
 - `Show Entry/SL/TP1/TP2 lines`
 - `Show info panel`
-- `Signal Audit Mode` (Visuals group, default off) — when on, an audit table appears below the info panel with the latest signal's exact values; when off, no audit table and the chart is identical to the default.
+- `Signal Audit Mode` (Visuals group, default off) — when on, an audit table appears below the info panel **on 15m charts only** with the latest signal's exact values; when off, no audit table and the chart is identical to the default.
 
 ## 6a. Signal Audit Mode verification
 
-1. Enable `Signal Audit Mode`, wait for a signal (or scroll to an existing one), and verify:
+1. Attach to **15m**, enable `Signal Audit Mode`, wait for a signal (or scroll to an existing one), and verify:
    - SIGNAL/SCORE match the main panel's LAST SIGNAL values exactly.
-   - H4 TREND / SLOPE / CROSS / ADX pass-fail marks and score contributions sum to the displayed TOTAL, and TOTAL equals the panel score.
+   - 4H TREND / 4H SLOPE / 1H CONF / M15 ENTRY / ADX pass-fail marks and score contributions sum to the displayed TOTAL, and TOTAL equals the panel score.
    - ENTRY / SL / TP1 / TP2 match the on-chart level lines exactly.
    - ADX and EMA values match the built-in indicators from §3.
    - BAR shows symbol, timeframe, and the signal candle's time; CONFIRMED reads "YES - closed candle".
-2. Disable the mode: the audit table disappears and the chart looks exactly as before.
+2. On **non-15m charts** the audit table must not appear even when the mode is on.
 
 Toggling level lines on must restore the **latest signal's** levels; toggling off must remove them.
 
@@ -107,10 +117,12 @@ For each optional filter (EMA separation, price vs EMA21, H4 momentum, ATR volat
 
 With invalid settings, the panel must show `CONFIG ERROR` (red header) with a reason, and **no signals may fire**:
 
-1. Set H4 EMA Fast = 200, Slow = 50 (fast ≥ slow) → reason `EMA fast >= slow`.
-2. Set all scoring weights to 0 → reason `all weights are 0`.
-3. Set Minimum Score = 200 with default weights (max 100) → reason `min score > max`.
-4. Restore defaults → the header returns to `MARKET` and signals resume.
+1. Set 4H EMA Fast = 200, Slow = 50 (fast ≥ slow) → reason `EMA fast >= slow`.
+2. Set 1H EMA Fast = 50, Slow = 21 → reason `EMA fast >= slow`.
+3. Set M15 EMA Fast = 21, Slow = 9 → reason `EMA fast >= slow`.
+4. Set all scoring weights to 0 → reason `all weights are 0`.
+5. Set Minimum Score = 200 with default weights (max 100) → reason `min score > max`.
+6. Restore defaults → the header returns to `MARKET` and signals resume.
 
 Each change must take effect immediately after re-running the script on the chart.
 
@@ -118,8 +130,8 @@ Each change must take effect immediately after re-running the script on the char
 
 The TradingView and MT5 versions implement the same core logic but are **not** expected to be tick-identical:
 
-- TradingView uses exchange-timezone H4 candles; MT5 uses broker server time — H4 bar boundaries can shift slightly.
-- The MT5 version is M15-attached and has fixed 25/25/25/25 scoring; the TradingView version is multi-timeframe with configurable weights.
+- TradingView uses exchange-timezone 4H candles; MT5 uses broker server time — 4H bar boundaries can shift slightly.
+- The MT5 version is M15-attached with the H4 trend and M15 entry; the TradingView v2.3.0 architecture adds the 1H confirmation layer.
 - Compare *patterns* (same signals on the same dates at the same H4 alignment), not exact arrow positions.
 
 ## 10. Backtest (future)

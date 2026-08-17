@@ -1,6 +1,6 @@
 # Strategy — CanvasV MTF Signal
 
-This document describes the **current baseline** (TradingView `v2.2.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal. The v2.1.0 and v2.2.0 releases changed presentation only — the logic described here is identical to v2.0.2.
+This document describes the **current baseline** (TradingView `v2.3.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
 
 ---
 
@@ -8,57 +8,73 @@ This document describes the **current baseline** (TradingView `v2.2.0` / MT5 Pha
 
 | Layer | Source |
 |---|---|
-| Trend filter | H4 EMA 50 / EMA 200 + EMA 50 slope |
-| Entry | Current chart timeframe (TradingView) or M15 (MT5) |
-| Confirmation | ADX ≥ minimum on the entry timeframe |
+| Trend | 4H EMA 50 / EMA 200 + EMA 50 slope |
+| Confirmation | 1H EMA 21 / EMA 50 |
+| Entry trigger | 15M EMA 9 / 21 crossover + ADX |
 | Risk | ATR(14) → Entry, SL, TP1, TP2 |
 | Confidence | Weighted score 0–100, minimum 75 |
 
-### TradingView multi-timeframe behaviour
+The intended hierarchy is: **4H** = main market direction, **1H** = intermediate momentum confirmation, **15M** = entry trigger. This is one consistent strategy, not three independent ones.
 
-- Chart TF **< H4**: trend comes from four single-line `request.security(syminfo.tickerid, "240", ..., lookahead = barmerge.lookahead_off)` calls → the **last closed H4 candle** (confirmed, step-constant).
-- Chart TF **≥ H4** (4H/6H/12H/D/W): trend is computed on the **chart timeframe itself** (self mode) and the panel labels it `Trend (chart TF)`. On a 4H chart this is exactly H4. On 6H/12H/D/W it is **not** the H4 trend — it is the trend of the chart timeframe (a slower EMA 50/200). This is a deliberate consequence of self mode, not a bug: the strategy's "higher timeframe" horizon becomes the chart timeframe itself, so the trend horizon is never *below* the entry horizon. If literal H4 trend filtering is required on 6H+ charts, that is a future change.
-- Entry EMAs, ADX and ATR always use the current chart timeframe.
+### TradingView timeframe behaviour
+
+- **15M chart (the primary/entry view):** BUY/SELL signals fire here. The 4H trend and 1H confirmation come from `request.security` with `lookahead = barmerge.lookahead_off`; the 15M entry (EMA cross, ADX, ATR) runs on the chart series.
+- **1H chart (confirmation view):** no entries. The panel shows `1H CONFIRMATION` / `CONTEXT - NO ENTRIES`. The 1H confirmation is read from the chart series (`[1]`, so never the forming bar); the 4H trend comes from `request.security`.
+- **4H chart (trend view):** no entries. The panel shows `4H TREND` / `CONTEXT - NO ENTRIES`. The trend is computed on the chart series itself (self mode, confirmed at close via `barstate.isconfirmed`); the panel reads it with `[1]`.
+- **Every other timeframe (1m/3m/5m/30m/2H/6H/12H/1D/1W):** BUY/SELL signals are **disabled by code** (`isM15` gate), not merely hidden. The panel shows the chart TF and `ENTRY SIGNALS DISABLED - M15 ONLY` in red.
+
+### HTF request methodology
+
+Each 4H value is a separate single-line `request.security(syminfo.tickerid, "240", expr, lookahead = barmerge.lookahead_off)` call; the 1H layer uses the same pattern on `"60"`. With `lookahead_off` a value only updates when its HTF candle **completes**: during the forming HTF candle it holds the last closed value and is step-constant (never rewrites history); at the exact HTF boundary bar it is the just-completed candle's final value — confirmed data at that bar's close. The 4H slope baseline `h4e50PrevH` applies `[1]` **inside** the 4H context, i.e. two consecutive confirmed 4H values.
 
 ---
 
-## 2. H4 trend
+## 2. 4H trend
 
-Closed H4 candles only. For BUY:
+Closed 4H candles only. For BUY:
 
-- **Trend bullish:** `H4 EMA 50 > H4 EMA 200`
-- **Slope confirmation:** `H4 EMA 50 (current closed) >= H4 EMA 50 (previous closed)`
+- **Trend bullish:** `4H EMA 50 > 4H EMA 200`
+- **Slope confirmation:** `4H EMA 50 (current closed) >= 4H EMA 50 (previous closed)`
 
 For SELL (mirrored):
 
-- **Trend bearish:** `H4 EMA 50 < H4 EMA 200`
-- **Slope confirmation:** `H4 EMA 50 (current closed) <= H4 EMA 50 (previous closed)`
+- **Trend bearish:** `4H EMA 50 < 4H EMA 200`
+- **Slope confirmation:** `4H EMA 50 (current closed) <= 4H EMA 50 (previous closed)`
 
-The slope compares two **consecutive closed H4 candles** (never the forming H4 candle).
+The slope compares two **consecutive closed 4H candles** (never the forming 4H candle).
 
 ---
 
-## 3. EMA 9/21 entry
+## 3. 1H confirmation
 
-On the entry timeframe, with `emaF = EMA 9`, `emaS = EMA 21`:
+Closed 1H candles only, EMA fast/slow default 21/50:
+
+- **Bullish confirmation:** `1H EMA 21 > 1H EMA 50`
+- **Bearish confirmation:** `1H EMA 21 < 1H EMA 50`
+
+On charts below 1H this comes from `request.security(..., "60", lookahead_off)`; on the 1H chart itself it is read from the chart series (never the forming bar). The 1H alignment replaces the old "momentum" scoring component — the signal now requires the intermediate timeframe to agree with the direction before an entry can score.
+
+---
+
+## 4. EMA 9/21 entry (15M)
+
+On the **15M chart only**, with `emaF = EMA 9`, `emaS = EMA 21`:
 
 - **Bullish crossover:** `emaF[previous] <= emaS[previous] AND emaF[current] > emaS[current]`
 - **Bearish crossover:** `emaF[previous] >= emaS[previous] AND emaF[current] < emaS[current]`
 
-Evaluated only on **closed candles**.
+Evaluated only on **closed 15M candles**. The crossover is a hard requirement of the signal (it gates), but no longer contributes points itself — its former weight now belongs to the 1H confirmation component.
 
 ---
 
-## 4. ADX filter
+## 5. ADX filter
 
-- `ADX = ta.dmi(period, period)` main line (Wilder's ADX; Pine has no `ta.adx`).
+- `ADX = ta.dmi(period, period)` main line (Wilder's ADX; Pine has no `ta.adx`), computed on the **15M chart series**.
 - Defaults: period 14, minimum 20.0.
-- The ADX value of the **closed signal candle** is used.
+- The ADX value of the **closed 15M signal candle** is used.
 - Weight configurable; set to 0 to disable the ADX component.
 
----
-
-## 5. Optional filters (TradingView; all OFF by default)
+## 6. Optional filters (TradingView; all OFF by default)
 
 | Filter | Rule (BUY example) | Default |
 |---|---|---|
@@ -77,16 +93,16 @@ Setting a weight to 0 disables both the gate and the points for that component.
 
 ---
 
-## 6. Scoring
+## 7. Scoring
 
 Each component contributes its weight when satisfied:
 
 | Component | Default weight | BUY condition | SELL condition |
 |---|---|---|---|
-| Trend | 25 | H4 bullish | H4 bearish |
-| Momentum | 25 | Bullish crossover | Bearish crossover |
+| Trend | 25 | 4H bullish | 4H bearish |
+| 1H Confirmation | 25 | 1H EMA 21 > EMA 50 | 1H EMA 21 < EMA 50 |
 | ADX | 25 | ADX ≥ minimum | ADX ≥ minimum |
-| Slope | 25 | H4 EMA 50 rising | H4 EMA 50 falling |
+| Slope | 25 | 4H EMA 50 rising | 4H EMA 50 falling |
 | Volatility | 0 | ATR regime ok | ATR regime ok |
 | Volume | 0 | Volume ok | Volume ok |
 
@@ -94,7 +110,7 @@ Each component contributes its weight when satisfied:
 
 **Config validation:** signals are suppressed when the inputs are internally inconsistent:
 
-- any EMA Fast ≥ its Slow (H4 or entry),
+- any EMA Fast ≥ its Slow (4H, 1H, or M15 entry),
 - all weights are 0 (`maxScore = 0`),
 - `MinimumScore > maxScore`.
 
@@ -102,13 +118,15 @@ The panel header then reads `CONFIG ERROR` and the bottom row shows the reason (
 
 ---
 
-## 7. Signal conditions
+## 8. Signal conditions
 
 **BUY** (exact):
 
 ```
-H4 bullish
-AND bullish crossover
+chart timeframe == 15M
+AND 4H bullish
+AND 1H bullish confirmation
+AND 15M bullish crossover
 AND all enabled optional gates pass
 AND score ≥ MinimumScore (default 75)
 ```
@@ -126,7 +144,7 @@ AND score ≥ StrongScore (default 100)
 
 ---
 
-## 8. ATR risk levels
+## 9. ATR risk levels
 
 ATR period 14, values of the closed signal candle, Entry = signal candle close:
 
@@ -141,7 +159,7 @@ Multipliers are configurable inputs.
 
 ---
 
-## 9. Closed-candle discipline / no repaint
+## 10. Closed-candle discipline / no repaint
 
 - Signals are only evaluated when `barstate.isconfirmed` (live bar) or on fully closed historical bars.
 - **H4 methodology:** each H4 value is a separate `request.security(syminfo.tickerid, "240", expr, lookahead = barmerge.lookahead_off)` call. With `lookahead_off` the value only updates when an H4 candle **completes**: during the forming H4 candle it holds the last closed H4 value and is step-constant (never rewrites history); at the exact H4 boundary bar it is the just-completed candle's final value, which is confirmed data at that bar's close. The slope baseline `h4e50PrevH` applies `[1]` **inside** the H4 context — one H4 candle before the last closed one, i.e. two consecutive confirmed H4 values.
@@ -150,21 +168,22 @@ Multipliers are configurable inputs.
 
 ---
 
-## 10. Defaults summary
+## 11. Defaults summary
 
 | Input | Default |
 |---|---|
-| H4 EMA Fast / Slow | 50 / 200 |
-| Entry EMA Fast / Slow | 9 / 21 |
+| 4H EMA Fast / Slow | 50 / 200 |
+| 1H EMA Fast / Slow | 21 / 50 |
+| M15 EMA Fast / Slow | 9 / 21 |
 | ADX weight / period / minimum | 25 / 14 / 20.0 |
 | ATR period / SL / TP1 / TP2 | 14 / 1.5 / 1.5 / 3.0 |
-| Trend / Momentum / Slope weights | 25 / 25 / 25 |
+| Trend / 1H Conf / Slope weights | 25 / 25 / 25 |
 | Minimum score | 75 |
 | STRONG enabled / threshold | on / 100 |
 | Optional filters | all off |
 | Alerts | off |
 
-## 11. MT5 differences (Phase 2 v2.00)
+## 12. MT5 differences (Phase 2 v2.00)
 
 - Attached to an **M15 chart** (enforced at init).
 - Scoring is fixed at 25/25/25/25 (no weights input yet), minimum 75, no STRONG tier, no optional filters.

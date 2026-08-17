@@ -2,6 +2,19 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v2.3.0 — Three-layer TF architecture (4H trend + 1H confirmation + 15M entry)
+
+Date: 2026-08-17
+
+- **Fixed timeframe architecture.** The indicator is no longer a "run on any chart TF" entry system. The roles are now fixed: **4H** = market trend (EMA 50/200 + EMA 50 slope), **1H** = intermediate confirmation (EMA 21/50), **15M** = entry trigger (EMA 9/21 cross + ADX + ATR).
+- **Signals fire ONLY on the 15M chart.** `buySig`/`sellSig` now include an `isM15` gate, so BUY/SELL are **actually disabled** (not merely hidden) on every other timeframe — 1m/3m/5m/30m/2H/6H/12H/1D/1W produce no signals in history or live.
+- **1H confirmation layer added:** two single-line `request.security(..., "60", lookahead_off)` calls for the last closed 1H candle (EMA 21/50), with chart-series self mode on the 1H chart. The old "Momentum" scoring component (25 pts for the cross) is now the **1H Confirmation** component (25 pts for 1H EMA alignment). The 15M EMA 9/21 cross remains a hard gate but no longer scores points.
+- **Self mode narrowed:** the trend is computed on the chart series **only on the 4H chart itself** (previously on every TF ≥ 4H). On all other charts the trend is the literal 4H series; the panel reads the self-mode trend with `[1]` so it never shows the forming bar.
+- **Panel:** new `TIMEFRAME` (M15 ENTRY / 1H CONFIRMATION / 4H TREND / chart TF) and `STATUS` (ENTRY ACTIVE / CONTEXT - NO ENTRIES / ENTRY SIGNALS DISABLED - M15 ONLY) rows; the MOMENTUM row is now `1H CONF`.
+- **Signal Audit Mode** now renders on 15M charts only and shows the three layers explicitly (4H TREND, 1H CONF, M15 ENTRY) with the exact snapshotted values and contributions.
+- **Config validation** extended: `1H EMA Fast < 1H EMA Slow` is now also enforced (`EMA fast >= slow`).
+- **Preserved:** closed-candle discipline (`barstate.isconfirmed`), the 4H/1H `lookahead_off` methodology (all `request.security` calls remain single-line), ATR Entry/SL/TP1/TP2 formulas (1.5/1.5/3.0), ADX/ATR periods, alerts, repaint protection, and all Pine build-compatibility constraints. MT5 code untouched.
+
 ## v2.2.0 — Signal Audit Mode (debug/diagnostic)
 
 Date: 2026-08-17

@@ -1,6 +1,6 @@
 # CanvasV MTF Signal
 
-A multi-timeframe **H4 Trend + EMA Crossover** buy/sell indicator, with two implementations maintained side by side:
+A multi-timeframe **4H Trend + 1H Confirmation + 15M Entry** buy/sell indicator, with two implementations maintained side by side:
 
 | Platform | Language | File |
 |---|---|---|
@@ -15,9 +15,9 @@ A multi-timeframe **H4 Trend + EMA Crossover** buy/sell indicator, with two impl
 
 A non-repainting trend-following signal system built on a simple, explicit rule set:
 
-1. **Trend filter** — H4 EMA 50/200 (plus an EMA 50 slope check).
-2. **Entry trigger** — current-timeframe EMA 9/21 crossover.
-3. **Confirmation** — ADX strength filter.
+1. **Trend filter** — 4H EMA 50/200 (plus an EMA 50 slope check).
+2. **Confirmation** — 1H EMA fast/slow alignment (EMA 21/50).
+3. **Entry trigger** — 15M EMA 9/21 crossover + ADX strength filter.
 4. **Risk** — ATR-based Entry / SL / TP1 / TP2 levels.
 5. **Confidence** — a 0–100 signal score with a configurable minimum.
 
@@ -27,14 +27,14 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 
 ## TradingView version
 
-- **Works on every chart timeframe** (1m, 3m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 12H, 1D, 1W).
-- **H4 trend** is fetched with four single-line `request.security(..., "240", lookahead = barmerge.lookahead_off)` calls — one per value, each guaranteed to hold the **last completed H4 candle** (step-constant during the forming H4 candle; signals only ever see confirmed H4 values). No repaint, no lookahead.
-- When the chart timeframe is **≥ H4** (4H, 6H, 12H, D, W), the trend is computed on the chart timeframe itself ("self mode") and labelled in the panel.
-- **Entry** (EMA 9/21 cross, ADX, ATR) always uses the **current chart timeframe** and fires only on **confirmed closed candles** (`barstate.isconfirmed`).
+- **Fixed three-layer architecture:** **4H** = market trend (EMA 50/200 + slope), **1H** = intermediate confirmation (EMA 21/50), **15M** = entry trigger (EMA 9/21 cross + ADX + ATR).
+- **Signals fire ONLY on the 15M chart** — one consistent strategy, no per-timeframe variants. On **1H** the indicator shows the confirmation/context view; on **4H** the trend/context view; on **every other timeframe** (1m/3m/5m/30m/2H/6H/12H/D/W…) BUY/SELL signals are **actually disabled** (not just hidden) and the panel shows `ENTRY SIGNALS DISABLED - M15 ONLY`.
+- **4H trend** is fetched with four single-line `request.security(..., "240", lookahead = barmerge.lookahead_off)` calls — one per value, each guaranteed to hold the **last completed 4H candle** (step-constant during the forming 4H candle; signals only ever see confirmed 4H values). No repaint, no lookahead.
+- **1H confirmation** uses the same methodology on `"60"`. On the 4H chart itself the trend is computed on the chart series (self mode, confirmed at close); on the 1H chart the confirmation uses the chart series. All signals fire only on **confirmed closed candles** (`barstate.isconfirmed`).
 - **Configurable scoring weights** with a default equivalent to the original 100-point model (25/25/25/25, minimum 75), plus optional **STRONG BUY / STRONG SELL** (threshold 100).
 - **Optional quality filters** (all off by default): EMA separation %, price vs EMA 21, H4 momentum, ATR volatility regime, volume confirmation.
 - **Config validation:** EMA periods must satisfy Fast < Slow, not all weights can be zero, and the minimum score cannot exceed the maximum achievable score — otherwise signals are suppressed and the panel shows `CONFIG ERROR` with the reason.
-- **Signal Audit Mode** (default off): a debug-only diagnostic table showing the exact values and conditions that produced the latest confirmed signal — H4 trend/slope, cross, ADX, score breakdown, ATR levels, and signal bar. Presentation only; when off the chart is unchanged.
+- **Signal Audit Mode** (default off): a debug-only diagnostic table (15M charts only) showing the exact values and conditions that produced the latest confirmed signal — 4H trend/slope, 1H confirmation, 15M entry trigger, ADX, score breakdown, ATR levels, and signal bar. Presentation only; when off the chart is unchanged.
 - **Visuals:** H4 EMAs, entry EMAs, BUY/SELL/STRONG markers with direction labels, a latest-signal score label, the latest Entry/SL/TP1/TP2 lines, and a two-section info panel (MARKET / LAST SIGNAL) — every element individually toggleable (incl. the score label).
 
 ## MT5 version
@@ -46,7 +46,7 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 
 ## Signal logic overview
 
-### H4 trend (both platforms)
+### 4H trend (both platforms)
 
 - **Bullish:** H4 EMA 50 > H4 EMA 200
 - **Bearish:** H4 EMA 50 < H4 EMA 200
@@ -54,10 +54,16 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 - **Slope (SELL):** closed H4 EMA 50 ≤ previous closed H4 EMA 50
 - Closed H4 candles only. No lookahead. No repainting.
 
-### EMA 9/21 entry
+### 1H confirmation
+
+- **Bullish:** 1H EMA 21 > 1H EMA 50 (last closed 1H candle)
+- **Bearish:** 1H EMA 21 < 1H EMA 50
+
+### EMA 9/21 entry (15M)
 
 - **Bullish crossover:** previous EMA 9 ≤ previous EMA 21 AND current EMA 9 > current EMA 21
 - **Bearish crossover:** previous EMA 9 ≥ previous EMA 21 AND current EMA 9 < current EMA 21
+- Evaluated on the **15M chart** (closed candles only).
 
 ### ADX filter
 
@@ -69,8 +75,8 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 
 ### Signal scoring
 
-- Each satisfied component adds its weight (defaults: trend 25, momentum 25, ADX 25, slope 25; max 100).
-- **BUY** requires: H4 bullish AND bullish crossover AND score ≥ minimum (default 75). **SELL** mirrored.
+- Each satisfied component adds its weight (defaults: trend 25, **1H confirmation** 25, ADX 25, slope 25; max 100).
+- **BUY** requires: 4H bullish AND 1H bullish confirmation AND 15M bullish crossover AND score ≥ minimum (default 75), on an **M15 chart**. **SELL** mirrored.
 - **STRONG** signals require a higher score threshold (default 100), optional.
 
 ---
@@ -97,6 +103,6 @@ See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
 
 ## Development status
 
-- **TradingView:** multi-timeframe baseline `v2.2.0` (hardening + rename + visual/UI refinement + Signal Audit Mode) — working and compiling in the Pine Editor.
+- **TradingView:** `v2.3.0` — three-layer TF architecture (4H trend + 1H confirmation + 15M entry), entries only on M15 charts — working and compiling in the Pine Editor.
 - **MT5:** Phase 2 `v2.00` — working on M15 charts.
 - **Next milestone:** a Pine `strategy()` backtest version (planned, not yet implemented).
