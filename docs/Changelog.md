@@ -10,6 +10,7 @@ Date: 2026-08-17
 - **Repaint proof documented:** each H4 value is step-constant during the forming H4 candle and only updates when an H4 candle completes; the slope baseline `[1]` is applied inside the H4 context (two consecutive closed H4 values). Comments and docs updated to state the exact semantics.
 - **Config validation:** signals are suppressed and the panel shows `CONFIG ERROR` + reason when an EMA Fast ≥ its Slow (H4 or entry), when all weights are 0, or when `MinimumScore > maxScore`. Weight inputs clamped ≥ 0.
 - **na-safe level redraw:** level-line/label deletion in the BUY/SELL blocks and in the `showLevels` toggle is guarded with `not na(...)`; toggling levels off now also nulls the stored ids — no risk of deleting non-existent objects.
+- **Color compatibility fix:** replaced the Pine v5-only extended color names (`dodgerblue`, `limegreen`, `magenta`) with universal palette names (`blue`, `green`, `fuchsia`) — every remaining color constant is supported from Pine v4 onward. Fixes `Undeclared identifier 'color.dodgerblue'/'color.limegreen'/'color.magenta'` on builds whose color table lacks the v5-only names.
 - **No trading-logic changes:** signal conditions, scoring defaults (25/25/25/25, min 75), ATR levels (1.5/1.5/3.0), H4 trend/slope rules, and STRONG thresholds are unchanged.
 
 ## v2.0.0 — TradingView multi-timeframe

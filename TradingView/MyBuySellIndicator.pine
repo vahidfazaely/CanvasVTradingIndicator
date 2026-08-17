@@ -217,10 +217,10 @@ tp2Sell = entry - atrVal * atrTp2Mult
 //--------------------------------------------------------------
 // EMAs on the chart (individually toggleable)
 //--------------------------------------------------------------
-plot(showH4EMAs    ? h4e50 : na, "H4 EMA 50",    color = color.new(color.dodgerblue, 0), linewidth = 1)
+plot(showH4EMAs    ? h4e50 : na, "H4 EMA 50",    color = color.new(color.blue, 0),       linewidth = 1)
 plot(showH4EMAs    ? h4e200 : na, "H4 EMA 200",  color = color.new(color.orange, 0),      linewidth = 2)
-plot(showEntryEMAs ? emaF   : na, "Entry EMA 9", color = color.new(color.limegreen, 0),   linewidth = 1)
-plot(showEntryEMAs ? emaS   : na, "Entry EMA 21",color = color.new(color.magenta, 0),     linewidth = 1)
+plot(showEntryEMAs ? emaF   : na, "Entry EMA 9", color = color.new(color.green, 0),       linewidth = 1)
+plot(showEntryEMAs ? emaS   : na, "Entry EMA 21",color = color.new(color.fuchsia, 0),     linewidth = 1)
 
 //--------------------------------------------------------------
 // Markers: BUY / STRONG BUY / SELL / STRONG SELL
