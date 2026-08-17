@@ -253,6 +253,16 @@ Defaults `TP1_R = 1.0`, `TP2_R = 2.5`, so TP1 = exactly 1R and TP2 = exactly 2.5
 | Optional filters | all off |
 | Alerts | off |
 
+## 14. Signal diagnostic layer (v3.2.0) — observational, not a backtest
+
+The diagnostic system is a **data-collection tool** that observes the existing engine. It never alters the signal decision:
+
+- **Event logger:** every confirmed candidate evaluation on a supported timeframe (15m/1H/4H) is recorded with the exact values the engine used — 4H regime (EMA50/200, separation %, slope), 1H (EMA21/50, close, structure/momentum), entry (EMA9/21, gap + previous gap, gap expansion), candle (direction, body %, range), quality (ADX, ATR, ATR%, chasing distance), score breakdown, and position (Entry/SL/TP1/TP2/Risk/RiskATR/R:R). All values are the existing engine variables — nothing is recalculated.
+- **First-failed-gate logging:** rejected candidates show the precise gate and observed value (`ADX 14.2 ✗ (min 99)`, `CHASE 2.13A ✗`, `RISK 3.12A > 2.50A`), derived only from existing gate booleans.
+- **Outcome tracking:** accepted signals are frozen (time, direction, Entry, SL, TP1, TP2, Risk) and followed across the next `Outcome tracking bars` **confirmed entry-TF candles after the signal bar**. MFE/MAE are computed in R from the signal's own Risk. Outcome is classified `SL FIRST` / `TP1 FIRST` / `TP2 FIRST` / `AMBIGUOUS` (SL and a TP touched inside the same candle — order unknowable from OHLC) / `EXPIRED` / `SUPERSEDED`. These values use only candles **after** the signal and never feed back into the signal decision.
+- **Pine persistence limitation:** Pine cannot write files, so the log is bounded in-script arrays (25/50/100 events) shown in tables, plus optional `CVLOG` alerts for external copy-paste. On reload the history replays deterministically from the same confirmed data.
+- **Not a backtest:** no `strategy()`, no orders, no position sizing, no account simulation, no profitability claims.
+
 ## 13. MT5 differences (Phase 2 v2.00)
 
 - Attached to an **M15 chart** (enforced at init).

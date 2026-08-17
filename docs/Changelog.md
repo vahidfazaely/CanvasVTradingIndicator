@@ -2,6 +2,21 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v3.2.0 — Signal Diagnostic Mode: event logger + outcome tracker
+
+Date: 2026-08-17
+
+- **Diagnostic-only release.** New `Diagnostics` input group: `Signal Diagnostic Mode` (default **off**), `Diagnostic history size` (default 50, max 100), `Outcome tracking bars` (default 20), `Enable diagnostic CVLOG alerts` (default off). When the mode is **off** the script is byte-identical to v3.1.0 except the version string — no labels, no tables, no alerts, no behavior change.
+- **Signal event logger.** Every confirmed candidate evaluation on a supported timeframe (15m/1H/4H) is captured with the **exact values the engine used** — 4H regime (EMA50/200, separation %, slope direction), 1H (EMA21/50, close, structure/momentum pass), entry (EMA9/21, gap and previous gap, gap-expansion pass), candle (direction, body %, range), quality (ADX, ATR, ATR%, chasing distance in ATR), full score breakdown (existing weights only), and position (Entry/SL/TP1/TP2/Risk/RiskATR/R:R). Reused existing variables — **no recalculation, no second implementation** of any gate.
+- **First-failed-gate logging.** Rejected candidates record the precise gate and actual value: `4H REGIME` / `4H SLOPE` / `4H SEPARATION` / `1H STRUCTURE` / `1H MOMENTUM` / `ENTRY STRUCTURE` / `GAP EXPANSION` / `CANDLE DIRECTION` / `CANDLE BODY` / `ADX` / `VOLATILITY` / `CHASING` / `OPTIONAL FILTERS` / `ATR INVALID` / `SCORE` / `RISK TOO LARGE` / `INVALID STRUCTURE`, with the observed value (`ADX 14.2 ✗ (min 99)`, `CHASE 2.13A ✗`, etc.). The existing Audit Mode `rejectTxt` is untouched.
+- **Bounded event history.** 10 parallel arrays (time/TF/dir/result/score/reason/entry/riskATR/RR1/RR2), newest at the end, oldest removed when over `Diagnostic history size`. Shown as one compact line per event in a `CANVASV DIAGNOSTICS` summary table (rendered only while the mode is on).
+- **Latest-event detail table.** `— LAST DIAGNOSTIC —` shows the frozen snapshot of the most recent event (EVENT, REASON, 4H, EMA50/200, 1H, ENTRY, CANDLE, EMA9/21, QUALITY, SCORE, POSITION, RISK/RR) plus the tracking state.
+- **Actual-signal outcome tracking (observational).** Each accepted signal is frozen (time, direction, Entry, SL, TP1, TP2, Risk) and followed across the next `Outcome tracking bars` **confirmed entry-TF candles after the signal bar**: MFE/MAE in R (`favorable/risk`, `adverse/risk`), TP1/TP2/SL hit flags, and outcome classification — `SL FIRST`, `TP1 FIRST`, `TP2 FIRST` (TP2 reached implies passing through TP1), `AMBIGUOUS` (SL and any TP touched inside the same candle — order unknowable from OHLC), `EXPIRED` (window elapsed), `SUPERSEDED` (a newer signal replaced an unresolved one). A bounded outcome log keeps the last 20 records.
+- **CVLOG export alert.** Optional `Enable diagnostic CVLOG alerts` emits a compact machine-readable line per event (`CVLOG|SYM|TF|DIR|RESULT|SCORE|REASON|ADX=..|ATR=..|RISK=..A|RR=../..|E=..|SL=..|TP1=..|TP2=..`), clearly separate from the trading alerts (own default-off input; the two trading `alert()` calls and the four `alertcondition`s are unchanged).
+- **Repaint / data integrity:** events are captured only at `barstate.isconfirmed` on supported timeframes; the H4/1H `request.security(..., lookahead_off)` methodology is untouched; outcome tracking inspects only candles **after** the signal bar and never feeds back into the signal decision (SIGNAL DECISION vs OUTCOME TRACKING separation). No `lookahead_on`, no future references in signal calculations.
+- **Pine limitation documented:** Pine cannot write files to disk, so persistence is bounded in-script arrays + optional alerts; historical events rebuild deterministically on reload (replayed from the same confirmed data). This is a **data-collection tool, not a backtest** — no `strategy()`, no orders, no P&L, no profitability claim.
+- **Unchanged (byte-verified vs v3.1.0):** `buySig`/`sellSig`, score model and thresholds, all Phase 1 gates, the Phase 2 position engine (structural SL, risk gate, R-based TPs), TF policy (15m/1H/4H only), trading alerts, `alertcondition`s, HTF methodology, repaint protection, and all Pine build-compatibility constraints. MT5 code untouched.
+
 ## v3.1.0 — Phase 2: structural risk & R-based position engine
 
 Date: 2026-08-17

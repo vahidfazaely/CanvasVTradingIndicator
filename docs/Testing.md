@@ -70,7 +70,25 @@ Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejec
 | 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
 | 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
 
-Restore defaults after each test (panel shows `v3.1.0`).
+Restore defaults after each test (panel shows `v3.2.0`).
+
+## 2c. Signal diagnostic / outcome logger tests (v3.2.0)
+
+Diagnostic Mode is observational only — it must never change signal behavior. The `Diagnostics` input group: `Signal Diagnostic Mode` (off), `Diagnostic history size` (25/50/100), `Outcome tracking bars` (10/20/40), `Enable diagnostic CVLOG alerts` (off).
+
+| # | Test | How | Expected |
+|---|---|---|---|
+| A | Diagnostic OFF | Default settings; compare against v3.1.0 | **No behavioral change**: same signals, no extra labels/tables/arrows; the `Diagnostics` inputs are the only additions |
+| B | Diagnostic ON | Enable `Signal Diagnostic Mode` on 15m | `CANVASV DIAGNOSTICS` summary table + `— LAST DIAGNOSTIC —` detail table appear; events accumulate |
+| C | Accepted signal | Wait for/scroll to a BUY or SELL | Event row `… SIGNAL <score> · E … · R …A · RR …`; detail `EVENT` reads `SIGNAL`; score/position rows match the panel and on-chart levels exactly |
+| D | Rejected candidate | Force a gate failure (e.g. `ADX Minimum` = 99) | Event row `… REJECTED · ADX`; detail `REASON` = `ADX` with the actual value (`ADX 14.2 ✗ (min 99)`); first failed gate only |
+| E | Score equality | On any event, compare detail `SCORE` with the panel score | Diagnostic score/max/breakdown **equal** the signal engine's `buyScore`/`sellScore`/`maxScore` (same variables, no recalculation) |
+| F | Position equality | Compare detail `POSITION`/`RISK/RR` with the on-chart Entry/SL/TP lines and panel | Entry/SL/TP1/TP2/Risk/R:R identical to the displayed values |
+| G | MFE/MAE start after signal | Note the signal bar; watch the `TRACK` row | No `TRACK` update on the signal bar itself — counting and MFE/MAE begin on the bar AFTER the signal candle |
+| H | SL/TP ambiguity | Find a signal whose candle touches both SL and any TP | `OUTCOME` = `AMBIGUOUS` (order unknowable from OHLC); no invented intrabar ordering |
+| I | Reload determinism | Reload the chart with Diagnostic Mode on | The same historical events reappear in the same order with identical values (replayed from the same confirmed data) |
+| J | Supported TFs | Repeat B–H on 15m, 1H, 4H | Same behavior; `TRACK` counts entry-TF bars |
+| K | Blocked TF | Enable Diagnostic Mode on 5m/30m/2H | No events (0 events header), no REASON rows — the disabled engine generates no diagnostics; tables show empty state |
 
 ## 2b. Position / risk engine tests (Phase 2, v3.1.0)
 

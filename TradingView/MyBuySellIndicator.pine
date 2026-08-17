@@ -10,6 +10,7 @@
 //|  v2.4.0 - Signal engine policy: 15m / 1H / 4H only               |
 //|  v2.5.0 - Phase 1 (v3): quality gates                             |
 //|  v3.1.0 - Phase 2: structural SL + risk validation + R-based TP   |
+//|  v3.2.0 - Signal Diagnostic Mode: event logger + outcome tracker   |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -42,7 +43,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v3.1.0"
+VERSION = "v3.2.0"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -57,6 +58,7 @@ grpOpt    = "=== Optional Filters ==="
 grpVis    = "=== Visuals ==="
 grpPanel  = "=== Panel ==="
 grpAlerts = "=== Alerts ==="
+grpDiag   = "=== Diagnostics ==="
 
 h4Fast = input.int(50,  "H4 EMA Fast", minval = 1, group = grpTrend)
 h4Slow = input.int(200, "H4 EMA Slow", minval = 2, group = grpTrend)
@@ -113,6 +115,11 @@ auditMode     = input.bool(false, "Signal Audit Mode (debug)",  group = grpVis)
 showPanel = input.bool(true, "Show info panel", group = grpPanel)
 
 enableAlerts = input.bool(false, "EnableAlerts", group = grpAlerts)
+
+diagMode         = input.bool(false, "Signal Diagnostic Mode", group = grpDiag)
+diagHistorySize  = input.int(50,     "Diagnostic history size", minval = 1, maxval = 100, group = grpDiag)
+outcomeBars      = input.int(20,     "Outcome tracking bars", minval = 1, maxval = 100, group = grpDiag)
+enableDiagAlerts = input.bool(false, "Enable diagnostic CVLOG alerts", group = grpDiag)
 
 //--------------------------------------------------------------
 // Chart timeframe role (signal-engine policy)
@@ -829,6 +836,336 @@ if isCandidateUp
 if isCandidateDn
     rejectTxt := not regimeDnOk ? "4H REGIME" : not h1ConfDn ? "1H CONFIRMATION" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? "ENTRY STRUCTURE" : not candleDnOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : sellScore < minScore ? "SCORE TOO LOW" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
 
+//==============================================================
+// SIGNAL DIAGNOSTIC SYSTEM (v3.2.0) - observational only
+//  Diagnostic Mode OFF : zero activity; chart and engine are
+//    byte-identical to v3.1.0. No labels, no tables, no alerts.
+//  Diagnostic Mode ON  : every confirmed candidate evaluation on
+//    a supported timeframe (15m/1H/4H) is logged with the EXACT
+//    values the engine used; the first failed gate is recorded;
+//    accepted signals are tracked for MFE/MAE (in R), TP/SL hits
+//    and outcome classification. This layer never feeds back into
+//    the signal decision - pure data collection.
+//  Pine limitation: Pine cannot write files to disk, so the log
+//    lives in bounded arrays (most recent N events) shown in a
+//    table, plus optional CVLOG alerts; export is copy-paste.
+//==============================================================
+//--- Event history buffer (bounded, newest at the end)
+var array<int>    evTime   = array.new_int()
+var array<string> evTf     = array.new_string()
+var array<string> evDir    = array.new_string()
+var array<string> evResult = array.new_string()
+var array<int>    evScore  = array.new_int()
+var array<string> evReason = array.new_string()
+var array<float>  evEntry  = array.new_float()
+var array<float>  evRiskA  = array.new_float()
+var array<float>  evRR1    = array.new_float()
+var array<float>  evRR2    = array.new_float()
+
+//--- Latest-event detail snapshot (exact engine values, frozen)
+var int    devTime     = na
+var string devTf       = ""
+var string devDir      = ""
+var string devResult   = ""
+var string devReason   = ""
+var string devSigType  = ""
+var int    devScore    = 0
+var int    devMax      = 0
+var int    devMin      = 0
+var float  devE50      = na
+var float  devE200     = na
+var float  devSep      = na
+var float  devE50Prev  = na
+var string devSlope    = ""
+var bool   devRegimeOk = false
+var float  devH1Fast   = na
+var float  devH1Slow   = na
+var float  devH1Close  = na
+var string devH1       = ""
+var float  devEmaF     = na
+var float  devEmaS     = na
+var float  devGap      = na
+var float  devGapPrev  = na
+var string devEntry    = ""
+var string devCandle   = ""
+var float  devAdx      = na
+var float  devAdxMin   = na
+var string devQual     = ""
+var float  devAtr      = na
+var float  devAtrPct   = na
+var float  devDistAtr  = na
+var string devScoreBrk = ""
+var float  devEntryPx  = na
+var float  devSL       = na
+var float  devTP1      = na
+var float  devTP2      = na
+var float  devRisk     = na
+var float  devRiskAtr  = na
+var float  devRR1      = na
+var float  devRR2      = na
+
+//--- Active-signal outcome tracking (one at a time; observational)
+var bool   trActive  = false
+var int    trBar     = na
+var int    trTime    = na
+var string trDir     = ""
+var float  trEntry   = na
+var float  trSL      = na
+var float  trTP1     = na
+var float  trTP2     = na
+var float  trRisk    = na
+var int    trElapsed = 0
+var float  trMFE     = 0.0
+var float  trMAE     = 0.0
+var float  trFinalR  = na
+var bool   trSlHit   = false
+var bool   trTp1Hit  = false
+var bool   trTp2Hit  = false
+var string trOutcome = ""
+var array<string> outLog = array.new_string()
+
+//--- Granular first-failed-gate reason, derived ONLY from the
+//--- existing gate booleans (observation, not a reimplementation)
+diagReasonUp = not regimeUpOk ? (not h4Bull ? "4H REGIME" : not slopeUp ? "4H SLOPE" : "4H SEPARATION") : not h1ConfUp ? "1H STRUCTURE" : not h1MomUp ? "1H MOMENTUM" : not setupGateUp ? (not setupUp ? "ENTRY STRUCTURE" : "GAP EXPANSION") : not candleUpOk ? (close <= open ? "CANDLE DIRECTION" : "CANDLE BODY") : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not buyGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : buyScore < minScore ? "SCORE" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
+diagReasonDn = not regimeDnOk ? (not h4Bear ? "4H REGIME" : not slopeDn ? "4H SLOPE" : "4H SEPARATION") : not h1ConfDn ? "1H STRUCTURE" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? (not setupDn ? "ENTRY STRUCTURE" : "GAP EXPANSION") : not candleDnOk ? (close >= open ? "CANDLE DIRECTION" : "CANDLE BODY") : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : sellScore < minScore ? "SCORE" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
+
+//--- Capture BUY candidate events (confirmed, supported TF only)
+if diagMode and isCandidateUp
+    devTime     := time
+    devTf       := timeframe.period
+    devDir      := "BUY"
+    devResult   := buySig ? "SIGNAL" : "REJECTED"
+    devReason   := buySig ? "" : diagReasonUp
+    devSigType  := strongBuy ? "STRONG BUY" : "BUY"
+    devScore    := buyScore
+    devMax      := maxScore
+    devMin      := minScore
+    devE50      := h4e50
+    devE200     := h4e200
+    devSep      := math.abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100
+    devE50Prev  := h4e50Prev
+    devSlope    := slopeUp ? "RISING" : slopeDn ? "FALLING" : "FLAT"
+    devRegimeOk := regimeUpOk
+    devH1Fast   := h1FastV
+    devH1Slow   := h1SlowV
+    devH1Close  := h1CloseV
+    devH1       := (h1ConfUp ? "STRUCT PASS" : "STRUCT FAIL") + " · " + (h1MomUp ? "MOM PASS" : "MOM FAIL")
+    devEmaF     := emaF
+    devEmaS     := emaS
+    devGap      := gapUp
+    devGapPrev  := gapUp[1]
+    devEntry    := (setupUp ? "STRUCT PASS" : "STRUCT FAIL") + " · " + (gapUpExp ? "GAP EXP PASS (" + str.tostring(gapUp[1], "#.##") + "→" + str.tostring(gapUp, "#.##") + ")" : "GAP EXP FAIL")
+    devCandle   := (close > open ? "UP" : "DN") + " · BODY " + str.tostring(candleBodyPct, "#.#") + "% · RANGE " + str.tostring(candleRange, format.mintick)
+    devAdx      := adxVal
+    devAdxMin   := adxMin
+    devAtr      := atrVal
+    devAtrPct   := atrPct
+    devDistAtr  := entryDistAtr
+    devQual     := (adxGateOk ? "ADX " + str.tostring(adxVal, "#.##") + " ✓" : "ADX " + str.tostring(adxVal, "#.##") + " ✗") + " · " + (volFloorOk ? "ATR% " + str.tostring(atrPct, "#.##") + " ✓" : "ATR% ✗") + " · " + (chaseGateOk ? "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✓" : "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✗")
+    devScoreBrk := "T" + str.tostring(h4Bull ? trendWeight : 0) + " H" + str.tostring(h1ConfUp ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeUp ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
+    devEntryPx  := entry
+    devSL       := slBuy
+    devTP1      := tp1Buy
+    devTP2      := tp2Buy
+    devRisk     := riskBuy
+    devRiskAtr  := riskAtrBuy
+    devRR1      := rrTp1Buy
+    devRR2      := rrTp2Buy
+
+    //--- Buffer push (bounded by the Diagnostic history size input)
+    array.push(evTime,   time)
+    array.push(evTf,     timeframe.period)
+    array.push(evDir,    "BUY")
+    array.push(evResult, devResult)
+    array.push(evScore,  buyScore)
+    array.push(evReason, devReason)
+    array.push(evEntry,  entry)
+    array.push(evRiskA,  riskAtrBuy)
+    array.push(evRR1,    rrTp1Buy)
+    array.push(evRR2,    rrTp2Buy)
+    if array.size(evTime) > diagHistorySize
+        array.remove(evTime, 0)
+        array.remove(evTf, 0)
+        array.remove(evDir, 0)
+        array.remove(evResult, 0)
+        array.remove(evScore, 0)
+        array.remove(evReason, 0)
+        array.remove(evEntry, 0)
+        array.remove(evRiskA, 0)
+        array.remove(evRR1, 0)
+        array.remove(evRR2, 0)
+
+    //--- A newer signal finalizes an older still-unresolved one
+    if buySig and trActive
+        trOutcome := "SUPERSEDED"
+        trFinalR  := (close - trEntry) / math.max(trRisk, 1e-10)
+        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b) MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
+        if array.size(outLog) > 20
+            array.remove(outLog, 0)
+    if buySig
+        trActive  := true
+        trBar     := bar_index
+        trTime    := time
+        trDir     := "BUY"
+        trEntry   := entry
+        trSL      := slBuy
+        trTP1     := tp1Buy
+        trTP2     := tp2Buy
+        trRisk    := riskBuy
+        trElapsed := 0
+        trMFE     := 0.0
+        trMAE     := 0.0
+        trFinalR  := na
+        trSlHit   := false
+        trTp1Hit  := false
+        trTp2Hit  := false
+        trOutcome := "unresolved"
+
+    //--- Optional CVLOG alert (separate from trading alerts; default off)
+    if enableDiagAlerts
+        alert("CVLOG|" + syminfo.ticker + "|" + timeframe.period + "|BUY|" + devResult + "|" + str.tostring(buyScore) + "|" + (devReason == "" ? "OK" : devReason) + "|ADX=" + str.tostring(adxVal, "#.##") + "|ATR=" + str.tostring(atrVal, "#.##") + "|RISK=" + str.tostring(riskAtrBuy, "#.##") + "A|RR=" + str.tostring(rrTp1Buy, "#.##") + "/" + str.tostring(rrTp2Buy, "#.##") + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slBuy, format.mintick) + "|TP1=" + str.tostring(tp1Buy, format.mintick) + "|TP2=" + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
+
+//--- Capture SELL candidate events (mirrored)
+if diagMode and isCandidateDn
+    devTime     := time
+    devTf       := timeframe.period
+    devDir      := "SELL"
+    devResult   := sellSig ? "SIGNAL" : "REJECTED"
+    devReason   := sellSig ? "" : diagReasonDn
+    devSigType  := strongSell ? "STRONG SELL" : "SELL"
+    devScore    := sellScore
+    devMax      := maxScore
+    devMin      := minScore
+    devE50      := h4e50
+    devE200     := h4e200
+    devSep      := math.abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100
+    devE50Prev  := h4e50Prev
+    devSlope    := slopeUp ? "RISING" : slopeDn ? "FALLING" : "FLAT"
+    devRegimeOk := regimeDnOk
+    devH1Fast   := h1FastV
+    devH1Slow   := h1SlowV
+    devH1Close  := h1CloseV
+    devH1       := (h1ConfDn ? "STRUCT PASS" : "STRUCT FAIL") + " · " + (h1MomDn ? "MOM PASS" : "MOM FAIL")
+    devEmaF     := emaF
+    devEmaS     := emaS
+    devGap      := gapDn
+    devGapPrev  := gapDn[1]
+    devEntry    := (setupDn ? "STRUCT PASS" : "STRUCT FAIL") + " · " + (gapDnExp ? "GAP EXP PASS (" + str.tostring(gapDn[1], "#.##") + "→" + str.tostring(gapDn, "#.##") + ")" : "GAP EXP FAIL")
+    devCandle   := (close < open ? "DN" : "UP") + " · BODY " + str.tostring(candleBodyPct, "#.#") + "% · RANGE " + str.tostring(candleRange, format.mintick)
+    devAdx      := adxVal
+    devAdxMin   := adxMin
+    devAtr      := atrVal
+    devAtrPct   := atrPct
+    devDistAtr  := entryDistAtr
+    devQual     := (adxGateOk ? "ADX " + str.tostring(adxVal, "#.##") + " ✓" : "ADX " + str.tostring(adxVal, "#.##") + " ✗") + " · " + (volFloorOk ? "ATR% " + str.tostring(atrPct, "#.##") + " ✓" : "ATR% ✗") + " · " + (chaseGateOk ? "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✓" : "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✗")
+    devScoreBrk := "T" + str.tostring(h4Bear ? trendWeight : 0) + " H" + str.tostring(h1ConfDn ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeDn ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
+    devEntryPx  := entry
+    devSL       := slSell
+    devTP1      := tp1Sell
+    devTP2      := tp2Sell
+    devRisk     := riskSell
+    devRiskAtr  := riskAtrSell
+    devRR1      := rrTp1Sell
+    devRR2      := rrTp2Sell
+
+    //--- Buffer push (bounded)
+    array.push(evTime,   time)
+    array.push(evTf,     timeframe.period)
+    array.push(evDir,    "SELL")
+    array.push(evResult, devResult)
+    array.push(evScore,  sellScore)
+    array.push(evReason, devReason)
+    array.push(evEntry,  entry)
+    array.push(evRiskA,  riskAtrSell)
+    array.push(evRR1,    rrTp1Sell)
+    array.push(evRR2,    rrTp2Sell)
+    if array.size(evTime) > diagHistorySize
+        array.remove(evTime, 0)
+        array.remove(evTf, 0)
+        array.remove(evDir, 0)
+        array.remove(evResult, 0)
+        array.remove(evScore, 0)
+        array.remove(evReason, 0)
+        array.remove(evEntry, 0)
+        array.remove(evRiskA, 0)
+        array.remove(evRR1, 0)
+        array.remove(evRR2, 0)
+
+    //--- A newer signal finalizes an older still-unresolved one
+    if sellSig and trActive
+        trOutcome := "SUPERSEDED"
+        trFinalR  := (trEntry - close) / math.max(trRisk, 1e-10)
+        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b) MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
+        if array.size(outLog) > 20
+            array.remove(outLog, 0)
+    if sellSig
+        trActive  := true
+        trBar     := bar_index
+        trTime    := time
+        trDir     := "SELL"
+        trEntry   := entry
+        trSL      := slSell
+        trTP1     := tp1Sell
+        trTP2     := tp2Sell
+        trRisk    := riskSell
+        trElapsed := 0
+        trMFE     := 0.0
+        trMAE     := 0.0
+        trFinalR  := na
+        trSlHit   := false
+        trTp1Hit  := false
+        trTp2Hit  := false
+        trOutcome := "unresolved"
+
+    //--- Optional CVLOG alert (mirrored)
+    if enableDiagAlerts
+        alert("CVLOG|" + syminfo.ticker + "|" + timeframe.period + "|SELL|" + devResult + "|" + str.tostring(sellScore) + "|" + (devReason == "" ? "OK" : devReason) + "|ADX=" + str.tostring(adxVal, "#.##") + "|ATR=" + str.tostring(atrVal, "#.##") + "|RISK=" + str.tostring(riskAtrSell, "#.##") + "A|RR=" + str.tostring(rrTp1Sell, "#.##") + "/" + str.tostring(rrTp2Sell, "#.##") + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slSell, format.mintick) + "|TP1=" + str.tostring(tp1Sell, format.mintick) + "|TP2=" + str.tostring(tp2Sell, format.mintick), alert.freq_once_per_bar_close)
+
+//--- Post-signal outcome tracking (confirmed bars AFTER the signal
+//--- bar only; MFE/MAE in R; TP/SL hits; outcome classification).
+//--- Observational - these values never feed back into the engine.
+if diagMode and trActive and isConfirmed and bar_index > trBar
+    trElapsed := trElapsed + 1
+    favR = trDir == "BUY" ? (high - trEntry) / math.max(trRisk, 1e-10) : (trEntry - low) / math.max(trRisk, 1e-10)
+    advR = trDir == "BUY" ? (trEntry - low) / math.max(trRisk, 1e-10) : (high - trEntry) / math.max(trRisk, 1e-10)
+    trMFE := math.max(trMFE, favR)
+    trMAE := math.max(trMAE, advR)
+    slT  = trDir == "BUY" ? low <= trSL  : high >= trSL
+    tp1T = trDir == "BUY" ? high >= trTP1 : low <= trTP1
+    tp2T = trDir == "BUY" ? high >= trTP2 : low <= trTP2
+    if slT
+        trSlHit := true
+    if tp1T
+        trTp1Hit := true
+    if tp2T
+        trTp2Hit := true
+    if trOutcome == "unresolved"
+        //--- SL and TP touched inside the same candle: order unknowable
+        if slT and (tp1T or tp2T)
+            trOutcome := "AMBIGUOUS"
+            trFinalR  := trDir == "BUY" ? (close - trEntry) / math.max(trRisk, 1e-10) : (trEntry - close) / math.max(trRisk, 1e-10)
+            trActive  := false
+        else if slT
+            trOutcome := "SL FIRST"
+            trFinalR  := -1.0
+            trActive  := false
+        else if tp2T
+            trOutcome := "TP2 FIRST"
+            trFinalR  := trDir == "BUY" ? (close - trEntry) / math.max(trRisk, 1e-10) : (trEntry - close) / math.max(trRisk, 1e-10)
+            trActive  := false
+        else if tp1T
+            trOutcome := "TP1 FIRST"
+            trFinalR  := trDir == "BUY" ? (close - trEntry) / math.max(trRisk, 1e-10) : (trEntry - close) / math.max(trRisk, 1e-10)
+            trActive  := false
+        else if trElapsed >= outcomeBars
+            trOutcome := "EXPIRED"
+            trFinalR  := trDir == "BUY" ? (close - trEntry) / math.max(trRisk, 1e-10) : (trEntry - close) / math.max(trRisk, 1e-10)
+            trActive  := false
+    if not trActive
+        array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> " + trOutcome + " (" + str.tostring(trElapsed) + "b) MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R R " + (na(trFinalR) ? "--" : str.tostring(trFinalR, "#.##")))
+        if array.size(outLog) > 20
+            array.remove(outLog, 0)
+
 var table aud = na
 
 if auditMode
@@ -924,3 +1261,93 @@ if not auditMode
     if not na(aud)
         table.delete(aud)
         aud := na
+
+//==============================================================
+// Diagnostic tables (Signal Diagnostic Mode only)
+//  Summary table: recent events, one compact line each.
+//  Detail table : the latest event's exact snapshot + outcome
+//  tracking state. Rebuilt only when needed (summary) or per
+//  bar (detail, fixed small grid) - no chart clutter in normal
+//  mode, nothing rendered when the mode is off.
+//==============================================================
+var table diagTbl    = na
+var table diagDetTbl = na
+var int   diagRows   = 0
+var int   evRendered = -1
+
+if diagMode
+    if na(diagTbl) or diagRows != diagHistorySize
+        if not na(diagTbl)
+            table.delete(diagTbl)
+        diagTbl := table.new(position.top_right, 1, diagHistorySize + 1, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        diagRows := diagHistorySize
+        evRendered := -1
+    if evRendered != array.size(evTime)
+        evRendered := array.size(evTime)
+        table.cell(diagTbl, 0, 0, "CANVASV DIAGNOSTICS (" + str.tostring(array.size(evTime)) + ")", text_color = color.white, text_size = size.small)
+        for i = 0 to diagHistorySize - 1
+            if i < array.size(evTime)
+                rowTxt = str.tostring(array.get(evTime, i), "MM-dd HH:mm") + " " + array.get(evTf, i) + " " + array.get(evDir, i) + " " + array.get(evResult, i) + (array.get(evResult, i) == "SIGNAL" ? " " + str.tostring(array.get(evScore, i)) + " · E " + str.tostring(array.get(evEntry, i), format.mintick) + " · R " + str.tostring(array.get(evRiskA, i), "#.##") + "A · RR " + str.tostring(array.get(evRR1, i), "#.##") + "/" + str.tostring(array.get(evRR2, i), "#.##") : " · " + array.get(evReason, i))
+                table.cell(diagTbl, 0, i + 1, rowTxt, text_color = color.silver, text_size = size.small)
+            else
+                table.cell(diagTbl, 0, i + 1, "", text_color = color.silver, text_size = size.small)
+
+    if na(diagDetTbl)
+        diagDetTbl := table.new(position.top_right, 2, 16, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+
+    //--- Latest-event detail (built from the frozen snapshots)
+    hasEv = not na(devTime)
+    evHeadTxt  = hasEv ? str.tostring(devTime, "MM-dd HH:mm") + " " + devTf + " " + devDir + " · " + devResult + (devResult == "SIGNAL" ? " " + devSigType : "") : "NO EVENTS YET"
+    h4Txt      = hasEv ? (devRegimeOk ? "PASS" : "FAIL") + " · " + devSlope + " · SEP " + str.tostring(devSep, "#.##") + "%" : "—"
+    e50Txt     = hasEv ? str.tostring(devE50, format.mintick) + " / " + str.tostring(devE200, format.mintick) + " (prev " + str.tostring(devE50Prev, format.mintick) + ")" : "—"
+    h1Txt      = hasEv ? devH1 + " · 21/50 " + str.tostring(devH1Fast, format.mintick) + "/" + str.tostring(devH1Slow, format.mintick) + " · CLOSE " + str.tostring(devH1Close, format.mintick) : "—"
+    entryTxt   = hasEv ? devEntry : "—"
+    candleTxt  = hasEv ? devCandle : "—"
+    emaTxt     = hasEv ? str.tostring(devEmaF, format.mintick) + " / " + str.tostring(devEmaS, format.mintick) + " (gap " + str.tostring(devGapPrev, "#.##") + "→" + str.tostring(devGap, "#.##") + ")" : "—"
+    qualTxt    = hasEv ? devQual + " (min " + str.tostring(devAdxMin, "#.##") + ")" : "—"
+    scoreTxt   = hasEv ? str.tostring(devScore) + "/" + str.tostring(devMax) + " · " + devScoreBrk + " · min " + str.tostring(devMin) : "—"
+    posTxt     = hasEv ? "E " + str.tostring(devEntryPx, format.mintick) + " · SL " + str.tostring(devSL, format.mintick) + " · TP1 " + str.tostring(devTP1, format.mintick) + " · TP2 " + str.tostring(devTP2, format.mintick) : "—"
+    rrTxt      = hasEv ? str.tostring(devRisk, format.mintick) + " · " + str.tostring(devRiskAtr, "#.##") + "A · RR " + str.tostring(devRR1, "#.##") + "/" + str.tostring(devRR2, "#.##") : "—"
+    trackTxt   = trActive ? str.tostring(trElapsed) + "/" + str.tostring(outcomeBars) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R" : na(trFinalR) ? "—" : str.tostring(trElapsed) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R"
+    hitsTxt    = (trActive or not na(trFinalR)) ? (trTp1Hit ? "TP1 HIT" : "TP1 NOT HIT") + " · " + (trTp2Hit ? "TP2 HIT" : "TP2 NOT HIT") + " · " + (trSlHit ? "SL HIT" : "SL NOT HIT") : "—"
+    lastOutTxt = array.size(outLog) > 0 ? array.get(outLog, array.size(outLog) - 1) : "—"
+
+    table.cell(diagDetTbl, 0, 0, "— LAST DIAGNOSTIC —", text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 1, 0, "", text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 1, "EVENT", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 1, evHeadTxt, text_color = devResult == "SIGNAL" ? color.lime : color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 2, "REASON", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 2, hasEv ? (devReason == "" ? "—" : devReason) : "—", text_color = color.red, text_size = size.small)
+    table.cell(diagDetTbl, 0, 3, "4H", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 3, h4Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 4, "EMA50/200", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 4, e50Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 5, "1H", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 5, h1Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 6, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 6, entryTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 7, "CANDLE", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 7, candleTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 8, "EMA9/21", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 8, emaTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 9, "QUALITY", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 9, qualTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 10, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 10, scoreTxt, text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 11, "POSITION", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 11, posTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 12, "RISK/RR", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 12, rrTxt, text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 13, "TRACK", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 13, trackTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 14, "HITS", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 14, hitsTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 15, "OUTCOME", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 15, trActive ? "TRACKING…" : lastOutTxt, text_color = color.silver, text_size = size.small)
+else
+    if not na(diagTbl)
+        table.delete(diagTbl)
+        diagTbl := na
+    if not na(diagDetTbl)
+        table.delete(diagDetTbl)
+        diagDetTbl := na
