@@ -1,6 +1,6 @@
 # Strategy — CanvasV MTF Signal
 
-This document describes the **current baseline** (TradingView `v3.4.2` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v3.4.4` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
 
 ---
 
@@ -277,6 +277,24 @@ v3.4.0 is a **presentation-only release**: colors and layout changed, trading lo
 - **Position levels:** ENTRY white/neutral, SL red, TP1 and TP2 share one directional color (green for a BUY position, red for a SELL position).
 - **Info panel (11 rows):** CANVASV MTF SIGNAL + version · TREND (green/red/silver) · SIGNAL (large, green/red/silver) · SCORE (neutral) · ENTRY · SL · TP1 · TP2 · RISK · R:R · one context footer (`15M SIGNAL · 1H BULLISH · ADX 35.8` + `ENABLED`/`DISABLED`). The footer turns red with the reason on blocked timeframes (`5M · SIGNALS DISABLED · Use 15m / 1H / 4H`) or config errors — no blank rows on normal charts.
 - **Debug tables** (Signal Audit Mode, Signal Decision Logger): content unchanged; PASS = green, FAIL = red, N/A / context = silver, primary values = white. All diagnostic functionality remains available and fully hidden when the modes are off.
+
+## 16. Signal Sensitivity presets (v3.4.4) — frequency tuning
+
+The `Signal Sensitivity` input (default **Conservative**) selectively relaxes SECONDARY confirmation filters so more 15m setups can print. It does this by parameterizing the existing gate thresholds — no parallel engine, no new signal path.
+
+| Filter | Conservative | Balanced | Aggressive |
+|---|---|---|---|
+| 4H slope gate | strict `>` | flat allowed `>=` | not required (direction + separation still required) |
+| 1H structure / momentum tolerance | 0% | 0.5% | 1.0% |
+| Candle body % | `minBodyPct` (50) | 40 | 30 |
+| ADX floor | `adxMin` (18) | `adxMin − 3` (15) | `adxMin − 6` (12) |
+| Chase distance (ATR) | `maxEntryDist` (1.5) | 2.0 | 2.5 |
+| Volatility floor % | `minVolPct` (0.05) | 0.04 | 0.03 |
+| Score slope (STRONG tier) | strict | strict | strict |
+
+**Never relaxed by any preset:** 4H direction (EMA50/200), 4H separation, entry structure / gap expansion, optional filters, `minScore` (75), structural SL, max-risk gate, TP/RR, repaint protection, `request.security` calls, alerts, MT5. Presets only relax — they never tighten below what the user configured. In Conservative every effective threshold equals its input, so the signal decision is byte-identical to v3.4.3.
+
+The score keeps the STRICT 4H slope, so flat / un-gated-slope setups score 75 and print as regular BUY/SELL; 100/STRONG still requires a genuinely rising/falling 4H plus full alignment.
 
 ## 13. MT5 differences (Phase 2 v2.00)
 

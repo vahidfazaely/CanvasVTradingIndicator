@@ -15,6 +15,8 @@
 //|  v3.4.0 - UI/UX cleanup: simplified color system + compact panel   |
 //|  v3.4.1 - Observability: logger context fields (diagnostic only)  |
 //|  v3.4.2 - Workflow: CVOUT resolution alerts + CVLOG time fields   |
+//|  v3.4.3 - Performance: event-driven debug tables (no per-tick redraw) |
+//|  v3.4.4 - Signal Sensitivity presets (15m frequency tuning)         |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -47,11 +49,12 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v3.4.2"
+VERSION = "v3.4.4"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
 //--------------------------------------------------------------
+grpSens   = "=== Signal Sensitivity ==="
 grpTrend  = "=== Trend ==="
 grpEntry  = "=== Entry ==="
 grpH1     = "=== 1H Confirmation ==="
@@ -63,6 +66,8 @@ grpVis    = "=== Visuals ==="
 grpPanel  = "=== Panel ==="
 grpAlerts = "=== Alerts ==="
 grpDiag   = "=== Diagnostics ==="
+
+signalSensitivity = input.string("Conservative", "Signal Sensitivity", options = ["Conservative", "Balanced", "Aggressive"], tooltip = "Selectively relaxes SECONDARY confirmation filters for the 15m timeframe. Conservative = v3.4.3 strictness (exact current behavior). Balanced = 4H flat slope allowed, 1H structure/momentum tolerance, softer candle-body / ADX / chase / volatility floors. Aggressive = additionally drops the 4H-slope gate requirement (4H direction + separation still required). Direction, repaint safety, minimum score, and the structural SL/TP/risk model are never weakened.", group = grpSens)
 
 h4Fast = input.int(50,  "H4 EMA Fast", minval = 1, group = grpTrend)
 h4Slow = input.int(200, "H4 EMA Slow", minval = 2, group = grpTrend)
@@ -124,6 +129,26 @@ enableAlerts = input.bool(false, "EnableAlerts", group = grpAlerts)
 diagHistorySize  = input.int(20,     "Diagnostic history size", minval = 1, maxval = 100, group = grpDiag)
 outcomeBars      = input.int(20,     "Outcome tracking bars", minval = 1, maxval = 100, group = grpDiag)
 enableDiagAlerts = input.bool(false, "Enable diagnostic CVLOG alerts", group = grpDiag)
+
+//--------------------------------------------------------------
+// Signal Sensitivity presets (selective relaxation only)
+//  Conservative : v3.4.3 behavior exactly (all effective = inputs).
+//  Balanced     : 4H flat slope allowed, 1H structure/momentum
+//                 tolerance, softer candle-body / ADX / chase /
+//                 volatility floors.
+//  Aggressive   : additionally drops the 4H-slope gate requirement
+//                 (4H direction + separation still required).
+//  Direction, repaint safety, minimum score and the structural
+//  SL/TP/risk model are NEVER weakened. Presets only relax - they
+//  never tighten below what the user configured.
+//--------------------------------------------------------------
+sensFlatSlope   = signalSensitivity != "Conservative"
+sensNoSlopeGate = signalSensitivity == "Aggressive"
+sensH1Tol       = signalSensitivity == "Conservative" ? 0.0 : signalSensitivity == "Balanced" ? 0.005 : 0.010
+sensAdxFloor    = signalSensitivity == "Conservative" ? adxMin : math.max(adxMin - (signalSensitivity == "Balanced" ? 3.0 : 6.0), 0.0)
+sensBodyMin     = signalSensitivity == "Conservative" ? minBodyPct : math.min(minBodyPct, signalSensitivity == "Balanced" ? 40.0 : 30.0)
+sensChaseMax    = signalSensitivity == "Conservative" ? maxEntryDist : math.max(maxEntryDist, signalSensitivity == "Balanced" ? 2.0 : 2.5)
+sensVolFloor    = signalSensitivity == "Conservative" ? minVolPct : math.min(minVolPct, signalSensitivity == "Balanced" ? 0.04 : 0.03)
 
 //--------------------------------------------------------------
 // Chart timeframe role (signal-engine policy)
@@ -197,11 +222,13 @@ h1FastV = isH1chart ? h1FastS : h1FastH
 h1SlowV = isH1chart ? h1SlowS : h1SlowH
 h1CloseH = request.security(syminfo.tickerid, "60", close, lookahead = barmerge.lookahead_off)
 h1CloseV = isH1chart ? close : h1CloseH
-h1ConfUp = h1FastV > h1SlowV
-h1ConfDn = h1FastV < h1SlowV
+//--- 1H structure/momentum with sensitivity tolerance (0 in
+//--- Conservative = identical to v3.4.3)
+h1ConfUp = h1FastV > h1SlowV * (1 - sensH1Tol)
+h1ConfDn = h1FastV < h1SlowV * (1 + sensH1Tol)
 //--- 1H momentum confirmation (HARD GATE): 1H close vs 1H EMA fast
-h1MomUp = h1CloseV >= h1FastV
-h1MomDn = h1CloseV <= h1FastV
+h1MomUp = h1CloseV >= h1FastV * (1 - sensH1Tol)
+h1MomDn = h1CloseV <= h1FastV * (1 + sensH1Tol)
 
 //--------------------------------------------------------------
 // Entry series: 15M entry timeframe (chart series on M15 charts)
@@ -221,18 +248,25 @@ isConfirmed = barstate.isconfirmed
 //--- a flat EMA50 counts for neither direction (regime = NEUTRAL).
 h4Bull  = h4e50 > h4e200
 h4Bear  = h4e50 < h4e200
-slopeUp = h4e50 > h4e50Prev
-slopeDn = h4e50 < h4e50Prev
-//--- 4H regime (HARD GATE): direction + strict slope + min separation.
-//--- All values are confirmed 4H candles (lookahead_off / close-gated).
+//--- Strict slope is kept for display (devSlope) and the STRONG-tier
+//--- score; the effective slope used by the gates allows flat in
+//--- Balanced/Aggressive.
+slopeUpStrict = h4e50 > h4e50Prev
+slopeDnStrict = h4e50 < h4e50Prev
+slopeUp = sensFlatSlope ? (h4e50 >= h4e50Prev) : slopeUpStrict
+slopeDn = sensFlatSlope ? (h4e50 <= h4e50Prev) : slopeDnStrict
+//--- 4H regime (HARD GATE): direction + slope (Aggressive: slope not
+//--- required) + min separation. Direction is NEVER relaxed by a
+//--- preset. All values are confirmed 4H candles (lookahead_off /
+//--- close-gated).
 sep4HOk = math.abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100 >= min4hSep
-regimeUpOk = h4Bull and slopeUp and sep4HOk
-regimeDnOk = h4Bear and slopeDn and sep4HOk
+regimeUpOk = h4Bull and (sensNoSlopeGate or slopeUp) and sep4HOk
+regimeDnOk = h4Bear and (sensNoSlopeGate or slopeDn) and sep4HOk
 
 //--- Entry crossover (evaluated at bar close only)
 crossUp = ta.crossover(emaF, emaS)
 crossDn = ta.crossunder(emaF, emaS)
-adxPass = adxVal >= adxMin
+adxPass = adxVal >= sensAdxFloor
 
 //--------------------------------------------------------------
 // Phase 1 quality gates (HARD GATES - a failure blocks the signal
@@ -251,16 +285,16 @@ setupGateDn = setupDn and gapDnExp
 //--- Candle quality: direction + minimum body (safe division)
 candleRange = high - low
 candleBodyPct = candleRange > 0 ? math.abs(close - open) / candleRange * 100 : 0.0
-candleUpOk = close > open and candleBodyPct >= minBodyPct
-candleDnOk = close < open and candleBodyPct >= minBodyPct
+candleUpOk = close > open and candleBodyPct >= sensBodyMin
+candleDnOk = close < open and candleBodyPct >= sensBodyMin
 //--- ADX floor (was score-only; now also a hard gate)
-adxGateOk = adxVal >= adxMin
+adxGateOk = adxVal >= sensAdxFloor
 //--- Volatility floor: ATR as % of price (safe division)
 atrPct = atrVal / math.max(close, 1e-10) * 100
-volFloorOk = atrPct >= minVolPct
+volFloorOk = atrPct >= sensVolFloor
 //--- Chasing filter: price distance from EMA9 in ATR units
 entryDistAtr = math.abs(close - emaF) / math.max(atrVal, 1e-10)
-chaseGateOk = entryDistAtr <= maxEntryDist
+chaseGateOk = entryDistAtr <= sensChaseMax
 
 //--------------------------------------------------------------
 // Optional filters (all OFF by default, direction-aware)
@@ -306,8 +340,11 @@ scoreOk   = maxScore > 0 and minScore <= maxScore
 configOk  = periodsOk and riskCfgOk and scoreOk
 cfgReason = not periodsOk ? "EMA fast >= slow" : not riskCfgOk ? "risk config invalid" : maxScore <= 0 ? "all weights are 0" : minScore > maxScore ? "min score > max" : ""
 
-buyScore  = (h4Bull   ? trendWeight : 0) + (h1ConfUp ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeUp  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
-sellScore = (h4Bear   ? trendWeight : 0) + (h1ConfDn ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeDn  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
+//--- The score keeps the STRICT 4H slope for the STRONG tier: relaxed
+//--- (flat / ungated-slope) setups score 75 and print as regular
+//--- BUY/SELL; STRONG still requires a genuinely rising/falling 4H.
+buyScore  = (h4Bull   ? trendWeight : 0) + (h1ConfUp ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeUpStrict  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
+sellScore = (h4Bear   ? trendWeight : 0) + (h1ConfDn ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeDnStrict  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
 
 //--------------------------------------------------------------
 // Position / Risk model (Phase 2): structural SL + R-based TP
@@ -481,7 +518,7 @@ if buySig
     audEmaF      := emaF
     audEmaS      := emaS
     audAdx       := adxVal
-    audAdxMin    := adxMin
+    audAdxMin    := sensAdxFloor
     audTrendOk   := h4Bull
     audH1Ok      := h1ConfUp
     audSlopeOk   := slopeUp
@@ -491,7 +528,7 @@ if buySig
     audVolConfOk := volConfOk
     audTrendPts  := h4Bull     ? trendWeight : 0
     audH1Pts     := h1ConfUp   ? momWeight   : 0
-    audSlopePts  := slopeUp    ? slopeWeight : 0
+    audSlopePts  := slopeUpStrict ? slopeWeight : 0
     audAdxPts    := adxPass    ? adxWeight   : 0
     audVolPts    := volOk      ? atrVolWeight : 0
     audVolConfPts := volConfOk ? volWeight   : 0
@@ -566,7 +603,7 @@ if sellSig
     audEmaF      := emaF
     audEmaS      := emaS
     audAdx       := adxVal
-    audAdxMin    := adxMin
+    audAdxMin    := sensAdxFloor
     audTrendOk   := h4Bear
     audH1Ok      := h1ConfDn
     audSlopeOk   := slopeDn
@@ -576,7 +613,7 @@ if sellSig
     audVolConfOk := volConfOk
     audTrendPts  := h4Bear     ? trendWeight : 0
     audH1Pts     := h1ConfDn   ? momWeight   : 0
-    audSlopePts  := slopeDn    ? slopeWeight : 0
+    audSlopePts  := slopeDnStrict ? slopeWeight : 0
     audAdxPts    := adxPass    ? adxWeight   : 0
     audVolPts    := volOk      ? atrVolWeight : 0
     audVolConfPts := volConfOk ? volWeight   : 0
@@ -801,30 +838,6 @@ else
 // conditions that produced the latest confirmed signal. When the
 // mode is off this block is inactive and the chart is unchanged.
 //--------------------------------------------------------------
-audDirTxt   = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
-              lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
-audSigCol   = lastSigType > 0 ? color.green : lastSigType < 0 ? color.red : color.silver
-audHas      = not na(lastSigBar)
-audScoreTxt = audHas ? str.tostring(lastScore) + " / " + str.tostring(lastMax) : "—"
-
-//--- Pass/fail text per component (exact snapshotted contributions)
-audTrendTxt   = audHas ? (audTrendOk   ? "✓ PASS  +" + str.tostring(audTrendPts)   : "✗ FAIL  +" + str.tostring(audTrendPts))   : "—"
-audH1Txt      = audHas ? (audH1Ok      ? "✓ PASS  +" + str.tostring(audH1Pts)      : "✗ FAIL  +" + str.tostring(audH1Pts))      : "—"
-audSlopeTxt   = audHas ? (audSlopeOk   ? "✓ PASS  +" + str.tostring(audSlopePts)   : "✗ FAIL  +" + str.tostring(audSlopePts))   : "—"
-audCrossTxt   = audHas ? (audCrossOk   ? "✓ PASS" : "✗ FAIL") : "—"
-audAdxTxt     = audHas ? (audAdxOk     ? "✓ PASS  +" + str.tostring(audAdxPts)     : "✗ FAIL  +" + str.tostring(audAdxPts))     : "—"
-audVolTxt     = audHas ? (audVolOk     ? "✓ PASS  +" + str.tostring(audVolPts)     : "✗ FAIL  +" + str.tostring(audVolPts))     : "—"
-audVolConfTxt = audHas ? (audVolConfOk ? "✓ PASS  +" + str.tostring(audVolConfPts) : "✗ FAIL  +" + str.tostring(audVolConfPts)) : "—"
-
-slopeDirTxt = audHas ? (audEma50 > audEma50Prev ? "rising" : audEma50 < audEma50Prev ? "falling" : "flat") : ""
-
-//--- Timeframe-policy display for the audit table
-signalTfTxt     = isM15 ? "15M" : isH1chart ? "1H" : isH4chart ? "4H" : str.tostring(timeframe.period)
-entryTfTxt      = isM15 ? "M15 ENTRY" : isH1chart ? "1H ENTRY" : isH4chart ? "4H ENTRY" : "ENTRY"
-audModeTxt      = isSupportedSignalTF ? "ENABLED" : "DISABLED"
-audModeCol      = isSupportedSignalTF ? color.green : color.red
-audConfirmedTxt = isSupportedSignalTF ? "YES - closed candle" : "NO - signals disabled"
-
 //--- Rejection reason (audit only): for a fresh confirmed crossover on a
 //--- supported timeframe whose setup was rejected, show the FIRST failed
 //--- gate in pipeline order. Empty when no candidate was rejected.
@@ -1034,6 +1047,10 @@ var int   stOutTp2 = 0
 var int   stOutAmb = 0
 var int   stOutExp = 0
 var int   stOutSup = 0
+//--- Debug redraw control: snapshot/stat tables rebuild only when
+//--- something changed (candidate, resolution, or last bar).
+var int   dbgRev     = 0
+var int   lastDbgRev = -1
 
 //--- Granular first-failed-gate reason, derived ONLY from the
 //--- existing gate booleans (observation, not a reimplementation)
@@ -1042,6 +1059,7 @@ diagReasonDn = not regimeDnOk ? (not h4Bear ? "4H REGIME" : not slopeDn ? "4H SL
 
 //--- Capture BUY candidate events (confirmed, supported TF only)
 if decisionLogger and isCandidateUp
+    dbgRev      := dbgRev + 1
     devTime     := time
     devTf       := timeframe.period
     devDir      := "BUY"
@@ -1055,7 +1073,7 @@ if decisionLogger and isCandidateUp
     devE200     := h4e200
     devSep      := math.abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100
     devE50Prev  := h4e50Prev
-    devSlope    := slopeUp ? "RISING" : slopeDn ? "FALLING" : "FLAT"
+    devSlope    := slopeUpStrict ? "RISING" : slopeDnStrict ? "FALLING" : "FLAT"
     devRegimeOk := regimeUpOk
     devH1Fast   := h1FastV
     devH1Slow   := h1SlowV
@@ -1068,12 +1086,12 @@ if decisionLogger and isCandidateUp
     devEntry    := (setupUp ? "STRUCT PASS" : "STRUCT FAIL") + " · " + (gapUpExp ? "GAP EXP PASS (" + str.tostring(gapUp[1], "#.##") + "→" + str.tostring(gapUp, "#.##") + ")" : "GAP EXP FAIL")
     devCandle   := (close > open ? "UP" : "DN") + " · BODY " + str.tostring(candleBodyPct, "#.#") + "% · RANGE " + str.tostring(candleRange, format.mintick)
     devAdx      := adxVal
-    devAdxMin   := adxMin
+    devAdxMin   := sensAdxFloor
     devAtr      := atrVal
     devAtrPct   := atrPct
     devDistAtr  := entryDistAtr
     devQual     := (adxGateOk ? "ADX " + str.tostring(adxVal, "#.##") + " ✓" : "ADX " + str.tostring(adxVal, "#.##") + " ✗") + " · " + (volFloorOk ? "ATR% " + str.tostring(atrPct, "#.##") + " ✓" : "ATR% ✗") + " · " + (chaseGateOk ? "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✓" : "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✗")
-    devScoreBrk := "T" + str.tostring(h4Bull ? trendWeight : 0) + " H" + str.tostring(h1ConfUp ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeUp ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
+    devScoreBrk := "T" + str.tostring(h4Bull ? trendWeight : 0) + " H" + str.tostring(h1ConfUp ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeUpStrict ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
     //--- Phase 4A context measurements (observation only)
     devH4SlopePct := h4SlopePct
     devH4DistAtr  := h4EmaDistAtr
@@ -1176,6 +1194,7 @@ if decisionLogger and isCandidateUp
 
     //--- A newer signal finalizes an older still-unresolved one
     if buySig and trActive
+        dbgRev     := dbgRev + 1
         trOutcome := "SUPERSEDED"
         trFinalR  := (close - trEntry) / math.max(trRisk, 1e-10)
         resH4     := h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
@@ -1219,6 +1238,7 @@ if decisionLogger and isCandidateUp
 
 //--- Capture SELL candidate events (mirrored)
 if decisionLogger and isCandidateDn
+    dbgRev      := dbgRev + 1
     devTime     := time
     devTf       := timeframe.period
     devDir      := "SELL"
@@ -1232,7 +1252,7 @@ if decisionLogger and isCandidateDn
     devE200     := h4e200
     devSep      := math.abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100
     devE50Prev  := h4e50Prev
-    devSlope    := slopeUp ? "RISING" : slopeDn ? "FALLING" : "FLAT"
+    devSlope    := slopeUpStrict ? "RISING" : slopeDnStrict ? "FALLING" : "FLAT"
     devRegimeOk := regimeDnOk
     devH1Fast   := h1FastV
     devH1Slow   := h1SlowV
@@ -1245,12 +1265,12 @@ if decisionLogger and isCandidateDn
     devEntry    := (setupDn ? "STRUCT PASS" : "STRUCT FAIL") + " · " + (gapDnExp ? "GAP EXP PASS (" + str.tostring(gapDn[1], "#.##") + "→" + str.tostring(gapDn, "#.##") + ")" : "GAP EXP FAIL")
     devCandle   := (close < open ? "DN" : "UP") + " · BODY " + str.tostring(candleBodyPct, "#.#") + "% · RANGE " + str.tostring(candleRange, format.mintick)
     devAdx      := adxVal
-    devAdxMin   := adxMin
+    devAdxMin   := sensAdxFloor
     devAtr      := atrVal
     devAtrPct   := atrPct
     devDistAtr  := entryDistAtr
     devQual     := (adxGateOk ? "ADX " + str.tostring(adxVal, "#.##") + " ✓" : "ADX " + str.tostring(adxVal, "#.##") + " ✗") + " · " + (volFloorOk ? "ATR% " + str.tostring(atrPct, "#.##") + " ✓" : "ATR% ✗") + " · " + (chaseGateOk ? "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✓" : "CHASE " + str.tostring(entryDistAtr, "#.##") + "A ✗")
-    devScoreBrk := "T" + str.tostring(h4Bear ? trendWeight : 0) + " H" + str.tostring(h1ConfDn ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeDn ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
+    devScoreBrk := "T" + str.tostring(h4Bear ? trendWeight : 0) + " H" + str.tostring(h1ConfDn ? momWeight : 0) + " A" + str.tostring(adxPass ? adxWeight : 0) + " S" + str.tostring(slopeDnStrict ? slopeWeight : 0) + " V" + str.tostring(volOk ? atrVolWeight : 0) + " V" + str.tostring(volConfOk ? volWeight : 0)
     //--- Phase 4A context measurements (observation only)
     devH4SlopePct := h4SlopePct
     devH4DistAtr  := h4EmaDistAtr
@@ -1353,6 +1373,7 @@ if decisionLogger and isCandidateDn
 
     //--- A newer signal finalizes an older still-unresolved one
     if sellSig and trActive
+        dbgRev     := dbgRev + 1
         trOutcome := "SUPERSEDED"
         trFinalR  := (trEntry - close) / math.max(trRisk, 1e-10)
         resH4     := h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
@@ -1435,6 +1456,7 @@ if decisionLogger and trActive and isConfirmed and bar_index > trBar
             trFinalR  := trDir == "BUY" ? (close - trEntry) / math.max(trRisk, 1e-10) : (trEntry - close) / math.max(trRisk, 1e-10)
             trActive  := false
     if not trActive
+        dbgRev := dbgRev + 1
         //--- Phase 4A resolution context (post-hoc; never feeds back)
         resH4    := h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
         resH1    := h1FastV > h1SlowV ? "BULLISH" : h1FastV < h1SlowV ? "BEARISH" : "NEUTRAL"
@@ -1463,7 +1485,56 @@ if decisionLogger and trActive and isConfirmed and bar_index > trBar
 
 var table aud = na
 
-if auditMode
+//--- Debug tables are event-driven: they rebuild only on confirmed
+//--- bars where a candidate/resolution occurred (or the last bar),
+//--- instead of on every tick - this keeps the script well inside
+//--- the Pine runtime budget.
+dbgRedraw = dbgRev != lastDbgRev or barstate.islast
+
+//--- Audit display strings. These are top-level var so both audit
+//--- blocks can see them, but recomputed ONLY on redraw bars (when
+//--- something changed) - between events they hold the last frozen
+//--- values. They are never calculated while Audit Mode is off.
+var string audDirTxt = "NONE"
+var color  audSigCol = color.silver
+var bool   audHas = false
+var string audScoreTxt = "—"
+var string audTrendTxt = "—"
+var string audH1Txt = "—"
+var string audSlopeTxt = "—"
+var string audCrossTxt = "—"
+var string audAdxTxt = "—"
+var string audVolTxt = "—"
+var string audVolConfTxt = "—"
+var string slopeDirTxt = ""
+var string signalTfTxt = ""
+var string entryTfTxt = ""
+var string audModeTxt = ""
+var color  audModeCol = color.silver
+var string audConfirmedTxt = ""
+
+if auditMode and dbgRedraw
+    //--- Audit display strings (frozen at the last event; recomputed
+    //--- only when something changed, not on every tick)
+    audDirTxt   := lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
+                   lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
+    audSigCol   := lastSigType > 0 ? color.green : lastSigType < 0 ? color.red : color.silver
+    audHas      := not na(lastSigBar)
+    audScoreTxt := audHas ? str.tostring(lastScore) + " / " + str.tostring(lastMax) : "—"
+    audTrendTxt   := audHas ? (audTrendOk   ? "✓ PASS  +" + str.tostring(audTrendPts)   : "✗ FAIL  +" + str.tostring(audTrendPts))   : "—"
+    audH1Txt      := audHas ? (audH1Ok      ? "✓ PASS  +" + str.tostring(audH1Pts)      : "✗ FAIL  +" + str.tostring(audH1Pts))      : "—"
+    audSlopeTxt   := audHas ? (audSlopeOk   ? "✓ PASS  +" + str.tostring(audSlopePts)   : "✗ FAIL  +" + str.tostring(audSlopePts))   : "—"
+    audCrossTxt   := audHas ? (audCrossOk   ? "✓ PASS" : "✗ FAIL") : "—"
+    audAdxTxt     := audHas ? (audAdxOk     ? "✓ PASS  +" + str.tostring(audAdxPts)     : "✗ FAIL  +" + str.tostring(audAdxPts))     : "—"
+    audVolTxt     := audHas ? (audVolOk     ? "✓ PASS  +" + str.tostring(audVolPts)     : "✗ FAIL  +" + str.tostring(audVolPts))     : "—"
+    audVolConfTxt := audHas ? (audVolConfOk ? "✓ PASS  +" + str.tostring(audVolConfPts) : "✗ FAIL  +" + str.tostring(audVolConfPts)) : "—"
+    slopeDirTxt := audHas ? (audEma50 > audEma50Prev ? "rising" : audEma50 < audEma50Prev ? "falling" : "flat") : ""
+    signalTfTxt     := isM15 ? "15M" : isH1chart ? "1H" : isH4chart ? "4H" : str.tostring(timeframe.period)
+    entryTfTxt      := isM15 ? "M15 ENTRY" : isH1chart ? "1H ENTRY" : isH4chart ? "4H ENTRY" : "ENTRY"
+    audModeTxt      := isSupportedSignalTF ? "ENABLED" : "DISABLED"
+    audModeCol      := isSupportedSignalTF ? color.green : color.red
+    audConfirmedTxt := isSupportedSignalTF ? "YES - closed candle" : "NO - signals disabled"
+
     if na(aud)
         aud := table.new(position.top_right, 2, 32, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
@@ -1483,7 +1554,7 @@ if auditMode
 //--- Detail rows (supported signal timeframes only). Separate top-level
 //--- if: the target Pine build does not support the 'end' keyword, so
 //--- blocks are delimited purely by indentation/dedent.
-if auditMode and isSupportedSignalTF
+if auditMode and isSupportedSignalTF and dbgRedraw
     //--- Signal + score
     table.cell(aud, 0, 4, "SIGNAL", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 4, audDirTxt, text_color = audSigCol,   text_size = size.normal)
@@ -1561,9 +1632,10 @@ if not auditMode
 // Diagnostic tables (Signal Diagnostic Mode only)
 //  Summary table: recent events, one compact line each.
 //  Detail table : the latest event's exact snapshot + outcome
-//  tracking state. Rebuilt only when needed (summary) or per
-//  bar (detail, fixed small grid) - no chart clutter in normal
-//  mode, nothing rendered when the mode is off.
+//  tracking state. All four tables are event-driven: they rebuild
+//  only on confirmed bars where a candidate/resolution occurred
+//  (or the last bar), not on every tick - keeps the script light.
+//  Nothing renders when the mode is off.
 //==============================================================
 var table diagTbl    = na
 var table diagDetTbl = na
@@ -1572,7 +1644,18 @@ var table statsTbl   = na
 var int   diagRows   = 0
 var int   evRendered = -1
 
+//--- Live tracking strings (var = persist; recomputed every bar while
+//--- the logger is on so TRACK/HITS/OUTCOME stay fresh between events)
+var string trackTxt   = "—"
+var string hitsTxt    = "—"
+var string lastOutTxt = "—"
+
 if decisionLogger
+    trackTxt   := trActive ? str.tostring(trElapsed) + "/" + str.tostring(outcomeBars) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R" : na(trFinalR) ? "—" : str.tostring(trElapsed) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R"
+    hitsTxt    := (trActive or not na(trFinalR)) ? (trTp1Hit ? "TP1 HIT" : "TP1 NOT HIT") + " · " + (trTp2Hit ? "TP2 HIT" : "TP2 NOT HIT") + " · " + (trSlHit ? "SL HIT" : "SL NOT HIT") : "—"
+    lastOutTxt := array.size(outLog) > 0 ? array.get(outLog, array.size(outLog) - 1) : "—"
+
+if decisionLogger and dbgRedraw
     if na(diagTbl) or diagRows != diagHistorySize
         if not na(diagTbl)
             table.delete(diagTbl)
@@ -1605,9 +1688,6 @@ if decisionLogger
     scoreTxt   = hasEv ? str.tostring(devScore) + "/" + str.tostring(devMax) + " · " + devScoreBrk + " · min " + str.tostring(devMin) : "—"
     posTxt     = hasEv ? "E " + str.tostring(devEntryPx, format.mintick) + " · SL " + str.tostring(devSL, format.mintick) + " · TP1 " + str.tostring(devTP1, format.mintick) + " · TP2 " + str.tostring(devTP2, format.mintick) : "—"
     rrTxt      = hasEv ? str.tostring(devRisk, format.mintick) + " · " + str.tostring(devRiskAtr, "#.##") + "A · RR " + str.tostring(devRR1, "#.##") + "/" + str.tostring(devRR2, "#.##") : "—"
-    trackTxt   = trActive ? str.tostring(trElapsed) + "/" + str.tostring(outcomeBars) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R" : na(trFinalR) ? "—" : str.tostring(trElapsed) + " bars · MFE +" + str.tostring(trMFE, "#.##") + "R · MAE -" + str.tostring(trMAE, "#.##") + "R"
-    hitsTxt    = (trActive or not na(trFinalR)) ? (trTp1Hit ? "TP1 HIT" : "TP1 NOT HIT") + " · " + (trTp2Hit ? "TP2 HIT" : "TP2 NOT HIT") + " · " + (trSlHit ? "SL HIT" : "SL NOT HIT") : "—"
-    lastOutTxt = array.size(outLog) > 0 ? array.get(outLog, array.size(outLog) - 1) : "—"
     //--- Phase 4A context display (frozen event snapshot + resolution)
     devSlopeTxt  = hasEv ? (devH4SlopePct > 0 ? "+" : "") + str.tostring(devH4SlopePct, "#.###") + "%" : "—"
     devSepTxt    = hasEv ? str.tostring(devSep, "#.###") + "%" : "—"
@@ -1801,7 +1881,8 @@ if decisionLogger
     table.cell(statsTbl, 1, 25, na(avgRes) ? "—" : str.tostring(avgRes, "#.#") + "b", text_color = color.silver, text_size = size.small)
     table.cell(statsTbl, 0, 26, "OUTCOMES", text_color = color.silver, text_size = size.small)
     table.cell(statsTbl, 1, 26, "SL " + str.tostring(stOutSl) + " · TP1 " + str.tostring(stOutTp1) + " · TP2 " + str.tostring(stOutTp2) + " · AMB " + str.tostring(stOutAmb) + " · EXP " + str.tostring(stOutExp) + " · SUP " + str.tostring(stOutSup), text_color = color.silver, text_size = size.small)
-else
+    lastDbgRev := dbgRev
+else if not decisionLogger
     if not na(diagTbl)
         table.delete(diagTbl)
         diagTbl := na
@@ -1814,3 +1895,13 @@ else
     if not na(statsTbl)
         table.delete(statsTbl)
         statsTbl := na
+
+//--- Between events, keep only the live tracking rows fresh (cheap
+//--- 3-row update instead of rebuilding all four tables each tick).
+if decisionLogger and not dbgRedraw and barstate.isconfirmed
+    table.cell(diagDetTbl, 0, 14, "TRACK", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 14, trackTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 15, "HITS", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 15, hitsTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 16, "OUTCOME", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 16, trActive ? "TRACKING…" : lastOutTxt, text_color = color.silver, text_size = size.small)

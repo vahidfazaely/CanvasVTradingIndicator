@@ -2,6 +2,31 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v3.4.4 — Signal Sensitivity presets (15m frequency tuning)
+
+Date: 2026-08-17
+
+**Feature release.** The new `Signal Sensitivity` input (default **Conservative**) tunes how many 15m setups print. Conservative is byte-identical behavior to v3.4.3; Balanced and Aggressive selectively relax only the secondary confirmation filters that were rejecting the most candidates (per Diagnostic Stats: 4H SLOPE 67, 1H STRUCTURE 28, 1H MOMENTUM 25, CANDLE 24, ADX 11, CHASING 4 of 345 rejections).
+
+- **Conservative** — every effective threshold equals the configured input (v3.4.3 exactly).
+- **Balanced** — 4H flat slope allowed (`>=`); 1H structure/momentum 0.5% tolerance; candle body 50→40%; ADX floor −3 (18→15); chase distance 1.5→2.0 ATR; volatility floor 0.05→0.04%.
+- **Aggressive** — additionally drops the 4H-slope gate requirement (4H direction + separation still required); 1H tolerance 1%; body 30%; ADX −6 (18→12); chase 2.5 ATR; vol floor 0.03%.
+- **Never relaxed by any preset:** 4H direction (EMA50/200), 4H separation, entry structure / gap expansion, optional filters, minimum score (75), structural SL, max-risk gate, TP/RR, repaint protection, all `request.security` calls, alerts, resolution, MT5. Presets only relax — they never tighten below user-configured values.
+- **STRONG tier stays meaningful:** the score keeps the STRICT 4H slope, so flat / un-gated-slope setups score 75 and print as regular BUY/SELL; 100/STRONG still requires a genuinely rising/falling 4H plus full alignment.
+- **Diagnostics:** architecture unchanged — the DIAGNOSTIC STATS table shows which filter limits frequency under the active preset; audit/decision rows display the effective ADX floor and strict slope points.
+- **Unchanged (proven):** with Sensitivity = Conservative every new expression reduces algebraically to the v3.4.3 formulas; SL/TP/risk/score/gates/alerts/repaint/MT5 untouched.
+
+## v3.4.3 — Performance: event-driven debug tables
+
+Date: 2026-08-17
+
+**Performance/presentation release. Trading logic is unchanged.**
+
+- **Fixes the "Heavy script" runtime warning.** With the Signal Decision Logger / Signal Audit Mode on, all debug tables (SIGNAL AUDIT 32 rows, DECISION LOG 29, GATE STATUS 17, DIAGNOSTIC STATS 27, RECENT DECISIONS) were rebuilt on every tick — roughly 250 `table.cell` calls plus ~50 formatted strings per bar across the full history.
+- **Event-driven redraw:** the snapshot-based tables now rebuild only on confirmed bars where a candidate was evaluated, a signal resolved (SL/TP/expiry/supersede), or the last bar — a `dbgRev` change counter gates the rebuild, and the table content is identical (it was already frozen event snapshots + cumulative counters). The live **TRACK / HITS / OUTCOME** rows still update every closed bar, so MFE/MAE stay current while a signal is being tracked.
+- **Audit display strings moved** into the gated block — previously they were computed on every bar even with Signal Audit Mode off.
+- **Unchanged (byte-verified vs v3.4.2):** every gate, score formula and threshold, `buySig`/`sellSig`, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all `request.security` calls (`lookahead_off`), repaint methodology, `alertcondition`s, trading alerts, CVLOG/CVOUT diagnostics, and MT5. The diff touches only table-presentation code, moved display strings, and the version string.
+
 ## v3.4.2 — Workflow: CVOUT resolution alerts + CVLOG time fields
 
 Date: 2026-08-17

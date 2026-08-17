@@ -70,7 +70,7 @@ Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejec
 | 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
 | 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
 
-Restore defaults after each test (panel shows `v3.4.2`).
+Restore defaults after each test (panel shows `v3.4.4`).
 
 ## 2c. Signal Decision Logger / outcome logger tests (v3.3.0)
 
@@ -151,6 +151,18 @@ v3.4.1 adds **observation-only** context fields to the Decision Logger. Trading 
 | Q | Resolution after 1H flip | A signal that resolves after the 1H has flipped against it | `1H EXIT` opposite to entry, `ALIGNMENT BROKEN` (red) | Post-hoc only — the signal decision is unchanged |
 
 `— DIAGNOSTIC STATS —` additionally shows `AVG SCORE`, `AVG H4 SLOPE`, `AVG H4 SEP`, `AVG H4 DIST`, `AVG ATR`, `AVG 1H AGE`, `AVG RES`, and an `OUTCOMES` count row (`SL / TP1 / TP2 / AMB / EXP / SUP`) — all computed from logged events only.
+
+## 2g. Signal Sensitivity tests (v3.4.4)
+
+Run on a 15m chart (BTCUSD or ETHUSDT), same symbol + historical range for all three presets.
+
+- **A. Conservative = v3.4.3:** with Sensitivity = Conservative every effective threshold equals its input (`sensH1Tol = 0`, `slopeUp = slopeUpStrict`, `sensAdxFloor = adxMin`, `sensBodyMin = minBodyPct`, `sensChaseMax = maxEntryDist`, `sensVolFloor = minVolPct`, regime still requires slope) → same candidates, same signals, same scores as v3.4.3. Verify: DIAGNOSTIC STATS counters match a v3.4.3 run over the same range.
+- **B. Balanced unlock:** a candidate v3.4.3 rejected at `4H SLOPE` (flat EMA50), `CANDLE BODY` (40–50%), or `ADX` (15–18) should now signal. DECISION LOG: flat-slope event scores 75 → regular BUY/SELL; strictly-rising 4H + full alignment scores 100 → STRONG.
+- **C. Aggressive unlock:** a candidate rejected at `4H SLOPE` with a declining 4H EMA50 but bullish direction should now signal; the first-failed-gate chain no longer reports `4H SLOPE` in Aggressive.
+- **D. No over-tighten:** set `maxEntryDist = 3.0`, Sensitivity = Balanced → chase gate stays 3.0 (presets never tighten below user values).
+- **E. STRONG tier:** flat-slope Balanced signals are regular BUY/SELL, never STRONG; STRONG requires a strictly rising/falling 4H.
+- **F. Invariants across presets:** for the same signal bar, Entry/SL/TP1/TP2/RISK/R:R are identical in all three presets; repaint unchanged (confirmed bars only); the 7 `request.security` calls unchanged; alerts fire only on the effective `buySig`/`sellSig`.
+- **G. Frequency comparison:** record BUY / SELL / total signals and the top rejection reasons from DIAGNOSTIC STATS per preset; check for excessive clustering (multiple signals within a few bars) and obvious noise (signals immediately reversed).
 
 ## 2b. Position / risk engine tests (Phase 2, v3.1.0)
 
