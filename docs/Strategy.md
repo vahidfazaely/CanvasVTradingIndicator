@@ -255,7 +255,7 @@ Defaults `TP1_R = 1.0`, `TP2_R = 2.5`, so TP1 = exactly 1R and TP2 = exactly 2.5
 
 ## 14. Signal Decision Logger (v3.3.0) — observational, not a backtest
 
-The diagnostic system is a **data-collection tool** that observes the existing engine. It never alters the signal decision. The master input is `Signal Decision Logger` (Visuals group, default off); when off the script is byte-identical to v3.2.0 except the version string.
+The diagnostic system is a **data-collection tool** that observes the existing engine. It never alters the signal decision. The master input is `Signal Decision Logger` (Visuals group, default off); when off the script is byte-identical to v3.3.0 except the version string (v3.4.0 added presentation-only color/layout changes).
 
 - **Candidate definition:** a **candidate** is a confirmed candle on a supported timeframe (15m/1H/4H) with a fresh EMA 9/21 crossover (BUY) or crossunder (SELL) — the existing entry trigger. Candles without a crossover are not logged (no flood of irrelevant bars).
 - **First-failure chain:** candidates are evaluated in the engine's actual order and the **first failing condition** is recorded: `4H REGIME` → `4H SLOPE` → `4H SEPARATION` → `1H STRUCTURE` → `1H MOMENTUM` → `ENTRY STRUCTURE` → `ENTRY POSITION` → `EMA EXPANSION` → `NO TRIGGER` → `CANDLE DIRECTION` → `CANDLE BODY` → `ADX` → `VOLATILITY` → `CHASING` → `OPTIONAL FILTERS` → `ATR INVALID` → `SCORE` → `RISK TOO LARGE` / `INVALID STRUCTURE` (SELL mirrored). `NO TRIGGER` is defined for completeness; logged candidates always have a trigger, so it cannot be the first failure of a logged event. The chain distinguishes **rejected before scoring** (gate failure) from **all gates passed but score insufficient** (`SCORE`) from **signal fired** (`DECISION = BUY/SELL`).
@@ -266,6 +266,16 @@ The diagnostic system is a **data-collection tool** that observes the existing e
 - **Historical behavior:** the logger runs on historical candles too — scrolling back shows the same decisions; reload replays them deterministically from the same confirmed data. History is bounded (`Diagnostic history size`, default 20).
 - **Pine persistence limitation:** Pine cannot write files, so the log is bounded in-script arrays shown in tables, plus optional `CVLOG` alerts for external copy-paste.
 - **Not a backtest:** no `strategy()`, no orders, no position sizing, no account simulation, no profitability claims.
+
+## 15. UI / color system (v3.4.0) — presentation only
+
+v3.4.0 is a **presentation-only release**: colors and layout changed, trading logic did not. All signal conditions, gates, scores, position math, alerts, timeframe policy, and repaint safeguards are byte-identical to v3.3.0.
+
+- **Semantic color roles (only five):** GREEN = bullish / BUY / PASS · RED = bearish / SELL / FAIL · WHITE = primary neutral values · SILVER = secondary / context / labels · blue/orange = EMA line identification only (fast lines blue, slow lines orange). No `lime`, `teal`, `fuchsia`, or blue-as-direction remain.
+- **Markers and score label:** BUY / STRONG BUY markers and the BUY score label are green; SELL / STRONG SELL and the SELL score label are red. The score itself is never colored by range.
+- **Position levels:** ENTRY white/neutral, SL red, TP1 and TP2 share one directional color (green for a BUY position, red for a SELL position).
+- **Info panel (11 rows):** CANVASV MTF SIGNAL + version · TREND (green/red/silver) · SIGNAL (large, green/red/silver) · SCORE (neutral) · ENTRY · SL · TP1 · TP2 · RISK · R:R · one context footer (`15M SIGNAL · 1H BULLISH · ADX 35.8` + `ENABLED`/`DISABLED`). The footer turns red with the reason on blocked timeframes (`5M · SIGNALS DISABLED · Use 15m / 1H / 4H`) or config errors — no blank rows on normal charts.
+- **Debug tables** (Signal Audit Mode, Signal Decision Logger): content unchanged; PASS = green, FAIL = red, N/A / context = silver, primary values = white. All diagnostic functionality remains available and fully hidden when the modes are off.
 
 ## 13. MT5 differences (Phase 2 v2.00)
 

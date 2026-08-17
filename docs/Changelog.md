@@ -2,7 +2,20 @@
 
 All notable changes to CanvasV MTF Signal.
 
-## v3.3.0 — Signal Decision Logger: first-failure chain, gate status, statistics
+## v3.4.0 — UI/UX cleanup: simplified color system + compact panel
+
+Date: 2026-08-17
+
+**Presentation-only release. Trading logic is unchanged.**
+
+- **Color system reduced to 5 roles:** GREEN = bullish / BUY / PASS · RED = bearish / SELL / FAIL · WHITE = primary neutral values · SILVER = secondary/context/labels · neutral identification colors for the EMA lines. Removed all semantic use of `lime`, `teal`, `fuchsia`, and blue-as-direction.
+- **Markers:** BUY / STRONG BUY are now **green** (were lime); SELL / STRONG SELL remain red. The latest-signal score label uses green for BUY / red for SELL (was lime).
+- **Position levels:** ENTRY line/label is now **white/neutral** (was blue); SL stays red; TP1 and TP2 now share **one directional color** — green for a BUY position, red for a SELL position (previously TP1 green / TP2 teal, which was not direction-consistent).
+- **EMA identification colors:** fast lines (H4 EMA 50, entry EMA 9) are blue, slow lines (H4 EMA 200, entry EMA 21) are orange — pure line identification, no bullish/bearish meaning. (Entry EMA 9 was green and EMA 21 fuchsia; both implied direction.)
+- **Compact panel (18 → 11 rows):** new hierarchy — title + version, **TREND** (green/red/silver), **SIGNAL** (large, green/red/silver), SCORE (always neutral), ENTRY (white), SL (red), TP1/TP2 (directional), RISK, R:R, then **one context footer line** — `15M SIGNAL · 1H BULLISH · ADX 35.8` with `ENABLED`/`DISABLED` status. The separate TIMEFRAME / STATUS / REASON / MARKET / LAST SIGNAL rows were folded away; on a blocked timeframe or config error the footer turns red and shows the reason (`5M · SIGNALS DISABLED · Use 15m / 1H / 4H`). No blank rows are wasted on normal charts.
+- **Debug tables (Audit Mode / Signal Decision Logger) unchanged in content**, colors unified to PASS = green, FAIL = red, N/A / context = silver, primary values = white. All diagnostic functionality (first-failure chain, GATE STATUS, DIAGNOSTIC STATS, RECENT DECISIONS, DECISION LOG, outcome tracking, CVLOG alerts) is fully preserved and remains hidden when the modes are off.
+- **Score is never colored by range** — always neutral, per the cleanup spec.
+- **Unchanged (byte-verified vs v3.3.0):** `buySig`/`sellSig`, all Phase 1 gates, score formulas and thresholds, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all 7 `request.security` calls (`lookahead_off`), repaint protection, frozen last-signal state, outcome tracking, alert logic, `alertcondition`s, and every Pine build-compatibility constraint. MT5 code untouched. This is a presentation-only release — no trading behavior changed.
 
 Date: 2026-08-17
 

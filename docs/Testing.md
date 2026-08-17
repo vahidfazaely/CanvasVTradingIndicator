@@ -70,7 +70,7 @@ Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejec
 | 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
 | 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
 
-Restore defaults after each test (panel shows `v3.3.0`).
+Restore defaults after each test (panel shows `v3.4.0`).
 
 ## 2c. Signal Decision Logger / outcome logger tests (v3.3.0)
 
@@ -108,6 +108,23 @@ With `Signal Decision Logger` ON, use the `RECENT DECISIONS` history, the `— D
 | J | Timeframe stability | Switch 15M → 1H → 4H and back | No historical signal moves or changes; each timeframe logs its own candidates correctly |
 
 After collecting BTCUSD samples, use `— DIAGNOSTIC STATS —` to see which filter kills the most setups — **observe, do not optimize** (that is a later phase).
+
+## 2e. UI / color-system tests (v3.4.0, presentation only)
+
+v3.4.0 changes colors and layout only. Verify no trading behavior changed and the chart is readable at a glance:
+
+| # | Test | How | Expected |
+|---|---|---|---|
+| A | BUY marker color | Scroll to a BUY / STRONG BUY | Markers are **green** (not lime); text reads `BUY` / `STRONG BUY` |
+| B | SELL marker color | Scroll to a SELL / STRONG SELL | Markers are **red**; text reads `SELL` / `STRONG SELL` |
+| C | Score label color | Note the `Score …` label on a BUY and a SELL | Green for BUY, red for SELL; the panel `SCORE` value is neutral (silver) |
+| D | Level colors (BUY) | On a BUY position with levels shown | ENTRY white/neutral, SL red, TP1 and TP2 both green |
+| E | Level colors (SELL) | On a SELL position with levels shown | ENTRY white/neutral, SL red, TP1 and TP2 both red |
+| F | Compact panel | Supported TF (15m/1H/4H), defaults | Panel is 11 rows: TREND → SIGNAL → SCORE → ENTRY → SL → TP1 → TP2 → RISK → R:R → one context footer (`15M SIGNAL · 1H BULLISH · ADX …` + `ENABLED`) |
+| G | Blocked-TF footer | Switch to 5m/30m | Footer is red: `5M · SIGNALS DISABLED · Use 15m / 1H / 4H` + `DISABLED` — no separate REASON row |
+| H | Debug tables | Enable `Signal Decision Logger` | DECISION LOG / GATE STATUS / STATS render with PASS = green, FAIL = red, N/A + context = silver; no lime/teal/fuchsia anywhere |
+| I | Logic unchanged | Compare signals on the same symbol/timeframe before and after loading v3.4.0 | Identical signal bars, scores, Entry/SL/TP1/TP2 prices, risk, R:R, and alerts — only colors/layout differ |
+| J | Reload | Reload the chart | Same markers/levels/panel; historical signals in the same place with identical values |
 
 ## 2b. Position / risk engine tests (Phase 2, v3.1.0)
 

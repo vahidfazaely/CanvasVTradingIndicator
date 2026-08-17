@@ -12,6 +12,7 @@
 //|  v3.1.0 - Phase 2: structural SL + risk validation + R-based TP   |
 //|  v3.2.0 - Signal Diagnostic Mode: event logger + outcome tracker   |
 //|  v3.3.0 - Signal Decision Logger: first-failure chain + statistics |
+//|  v3.4.0 - UI/UX cleanup: simplified color system + compact panel   |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -44,7 +45,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v3.3.0"
+VERSION = "v3.4.0"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -137,7 +138,7 @@ isH4chart = tfSec == 14400
 isSupportedSignalTF = isM15 or isH1chart or isH4chart
 tfRoleTxt    = isM15 ? "15M SIGNAL" : isH1chart ? "1H SIGNAL" : isH4chart ? "4H SIGNAL" : str.tostring(timeframe.period)
 tfStatusTxt  = isSupportedSignalTF ? "SIGNAL ENGINE ENABLED" : "SIGNALS DISABLED"
-tfStatusCol  = isSupportedSignalTF ? color.lime : color.red
+tfStatusCol  = isSupportedSignalTF ? color.green : color.red
 tfReasonTxt  = isSupportedSignalTF ? "" : "Use 15m / 1H / 4H"
 
 //--------------------------------------------------------------
@@ -383,14 +384,14 @@ strongSell = sellSig and enableStrong and sellScore >= strongScore
 //--------------------------------------------------------------
 plot(showH4EMAs    ? h4e50 : na, "H4 EMA 50",    color = color.new(color.blue, 0),       linewidth = 1)
 plot(showH4EMAs    ? h4e200 : na, "H4 EMA 200",  color = color.new(color.orange, 0),      linewidth = 2)
-plot(showEntryEMAs ? emaF   : na, "Entry EMA 9", color = color.new(color.green, 0),       linewidth = 1)
-plot(showEntryEMAs ? emaS   : na, "Entry EMA 21",color = color.new(color.fuchsia, 0),     linewidth = 1)
+plot(showEntryEMAs ? emaF   : na, "Entry EMA 9", color = color.new(color.blue, 0),        linewidth = 1)
+plot(showEntryEMAs ? emaS   : na, "Entry EMA 21",color = color.new(color.orange, 0),      linewidth = 1)
 
 //--------------------------------------------------------------
 // Markers: BUY / STRONG BUY / SELL / STRONG SELL
 //--------------------------------------------------------------
-plotshape(showMarkers and buySig  and not strongBuy,  "BUY",         style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.normal, textcolor = color.lime, text = "BUY")
-plotshape(showMarkers and strongBuy,                  "STRONG BUY",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.large,  textcolor = color.lime, text = "STRONG BUY")
+plotshape(showMarkers and buySig  and not strongBuy,  "BUY",         style = shape.triangleup,   location = location.belowbar, color = color.new(color.green, 0), size = size.normal, textcolor = color.green, text = "BUY")
+plotshape(showMarkers and strongBuy,                  "STRONG BUY",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.green, 0), size = size.large,  textcolor = color.green, text = "STRONG BUY")
 plotshape(showMarkers and sellSig and not strongSell, "SELL",        style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.normal, textcolor = color.red, text = "SELL")
 plotshape(showMarkers and strongSell,                 "STRONG SELL", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.large,  textcolor = color.red, text = "STRONG SELL")
 
@@ -524,18 +525,18 @@ if buySig
         label.delete(lblSig)
 
     if showLevels
-        lnEntry := line.new(bar_index, entry,  bar_index, entry,  extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
+        lnEntry := line.new(bar_index, entry,  bar_index, entry,  extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
         lnSL    := line.new(bar_index, slBuy,  bar_index, slBuy,  extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
         lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
-        lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
+        lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
 
-        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small)
+        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
         lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
         lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
-        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small)
+        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
 
     if showSigLabels
-        lblSig := label.new(bar_index, high, "Score " + str.tostring(buyScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.lime, size = size.small)
+        lblSig := label.new(bar_index, high, "Score " + str.tostring(buyScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
 
 //--------------------------------------------------------------
 // On a new confirmed SELL / STRONG SELL: remember + redraw levels
@@ -608,15 +609,15 @@ if sellSig
         label.delete(lblSig)
 
     if showLevels
-        lnEntry := line.new(bar_index, entry,   bar_index, entry,   extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
+        lnEntry := line.new(bar_index, entry,   bar_index, entry,   extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
         lnSL    := line.new(bar_index, slSell,  bar_index, slSell,  extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
-        lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
-        lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
+        lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
+        lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
 
-        lblEntry := label.new(bar_index, entry,   "ENTRY " + str.tostring(entry,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small)
+        lblEntry := label.new(bar_index, entry,   "ENTRY " + str.tostring(entry,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
         lblSL    := label.new(bar_index, slSell,  "SL "    + str.tostring(slSell,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
-        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "   + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
-        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "   + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small)
+        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "   + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.small)
+        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "   + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.small)
 
     if showSigLabels
         lblSig := label.new(bar_index, low, "Score " + str.tostring(sellScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.small)
@@ -656,15 +657,15 @@ else if showLevels != prevShowLevels
             lblTP2 := na
     else
         if not na(lastSigBar)
-            lnEntry := line.new(lastSigBar, lastEntry,  lastSigBar, lastEntry,  extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
+            lnEntry := line.new(lastSigBar, lastEntry,  lastSigBar, lastEntry,  extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
             lnSL    := line.new(lastSigBar, lastSL,     lastSigBar, lastSL,     extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
-            lnTP1   := line.new(lastSigBar, lastTP1,    lastSigBar, lastTP1,    extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
-            lnTP2   := line.new(lastSigBar, lastTP2,    lastSigBar, lastTP2,    extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
+            lnTP1   := line.new(lastSigBar, lastTP1,    lastSigBar, lastTP1,    extend = extend.right, color = color.new(lastSigType > 0 ? color.green : color.red, 0), style = line.style_dotted, width = 1)
+            lnTP2   := line.new(lastSigBar, lastTP2,    lastSigBar, lastTP2,    extend = extend.right, color = color.new(lastSigType > 0 ? color.green : color.red, 0), style = line.style_dotted, width = 1)
 
-            lblEntry := label.new(lastSigBar, lastEntry,  "ENTRY " + str.tostring(lastEntry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small)
+            lblEntry := label.new(lastSigBar, lastEntry,  "ENTRY " + str.tostring(lastEntry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
             lblSL    := label.new(lastSigBar, lastSL,     "SL "    + str.tostring(lastSL,     format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
-            lblTP1   := label.new(lastSigBar, lastTP1,    "TP1 "   + str.tostring(lastTP1,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
-            lblTP2   := label.new(lastSigBar, lastTP2,    "TP2 "   + str.tostring(lastTP2,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small)
+            lblTP1   := label.new(lastSigBar, lastTP1,    "TP1 "   + str.tostring(lastTP1,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = lastSigType > 0 ? color.green : color.red, size = size.small)
+            lblTP2   := label.new(lastSigBar, lastTP2,    "TP2 "   + str.tostring(lastTP2,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = lastSigType > 0 ? color.green : color.red, size = size.small)
 
 //--------------------------------------------------------------
 // Live toggle of the score label (showSigLabels changed)
@@ -680,7 +681,7 @@ else if showSigLabels != prevShowSigLabels
             lblSig := na
     else
         if not na(lastSigBar)
-            lblSig := label.new(lastSigBar, lastSigType > 0 ? lastSigHigh : lastSigLow, "Score " + str.tostring(lastScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = lastSigType > 0 ? color.lime : color.red, size = size.small)
+            lblSig := label.new(lastSigBar, lastSigType > 0 ? lastSigHigh : lastSigLow, "Score " + str.tostring(lastScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = lastSigType > 0 ? color.green : color.red, size = size.small)
 
 //--------------------------------------------------------------
 // Alerts (once per confirmed signal, live bars only)
@@ -725,7 +726,16 @@ panelE200 = isH4chart ? h4e200[1] : h4e200
 panelH1Fast = isH1chart ? h1FastS[1] : h1FastH
 panelH1Slow = isH1chart ? h1SlowS[1] : h1SlowH
 
-trendLbl = "H4 TREND"
+//--- Position-level colors: entry neutral, SL red, TP directional
+//--- (green for a BUY position, red for a SELL position).
+tpCol   = lastSigType > 0 ? color.green : lastSigType < 0 ? color.red : color.silver
+//--- Compact context footer: TF role + 1H state + ADX. The status /
+//--- reason text only turns red when it actually matters (blocked
+//--- timeframe or config error) - no blank rows on supported charts.
+ctxTxt  = not isSupportedSignalTF ? str.tostring(timeframe.period) + " · SIGNALS DISABLED · " + tfReasonTxt : configOk ? tfRoleTxt + " · 1H " + h1MomTxt + " · ADX " + str.tostring(adxVal[1], "#.##") : tfRoleTxt + " · CONFIG " + cfgReason
+ctxCol  = not isSupportedSignalTF or not configOk ? color.red : color.silver
+statTxt = isSupportedSignalTF ? "ENABLED" : "DISABLED"
+statCol = isSupportedSignalTF ? color.green : color.red
 //--- Regime shown in the panel (stable values: previous closed 4H on the
 //--- 4H chart, last closed 4H elsewhere). NEUTRAL when the slope is flat
 //--- or the separation is below the minimum.
@@ -734,62 +744,50 @@ panelRegUp = panelE50 > panelE200 and panelE50 > panelE50Prev and panelSepOk
 panelRegDn = panelE50 < panelE200 and panelE50 < panelE50Prev and panelSepOk
 trendTxt = panelRegUp ? "BULLISH" : panelRegDn ? "BEARISH" : "NEUTRAL"
 h1MomTxt = panelH1Fast > panelH1Slow ? "BULLISH" : panelH1Fast < panelH1Slow ? "BEARISH" : "NEUTRAL"
-h1MomCol = h1MomTxt == "BULLISH" ? color.lime : h1MomTxt == "BEARISH" ? color.red : color.silver
+h1MomCol = h1MomTxt == "BULLISH" ? color.green : h1MomTxt == "BEARISH" ? color.red : color.silver
 
 sigTxt = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
          lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
 
-sigColor   = lastSigType > 0 ? color.lime : lastSigType < 0 ? color.red : color.silver
-trendColor = trendTxt == "BULLISH" ? color.lime : trendTxt == "BEARISH" ? color.red : color.silver
+sigColor   = lastSigType > 0 ? color.green : lastSigType < 0 ? color.red : color.silver
+trendColor = trendTxt == "BULLISH" ? color.green : trendTxt == "BEARISH" ? color.red : color.silver
 
 var table pan = na
 
 if showPanel
     if na(pan)
-        pan := table.new(position.top_right, 2, 18, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        pan := table.new(position.top_right, 2, 11, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Title
     table.cell(pan, 0, 0, "CANVASV MTF SIGNAL", text_color = color.white,  text_size = size.normal)
     table.cell(pan, 1, 0, VERSION,              text_color = color.silver, text_size = size.small)
-    //--- Timeframe status
-    table.cell(pan, 0, 1, "TIMEFRAME", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 1, tfRoleTxt,   text_color = color.white,   text_size = size.normal)
-    table.cell(pan, 0, 2, "STATUS",    text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 2, tfStatusTxt, text_color = tfStatusCol,   text_size = size.small)
-    //--- Reason (unsupported timeframes only)
-    table.cell(pan, 0, 3, "REASON", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 3, isSupportedSignalTF ? "" : tfReasonTxt, text_color = color.red, text_size = size.small)
-    //--- MARKET
-    table.cell(pan, 0, 4, "— MARKET —", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 4, "",           text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 5, trendLbl, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 5, trendTxt, text_color = trendColor,   text_size = size.normal)
-    table.cell(pan, 0, 6, "1H CONF", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 6, h1MomTxt, text_color = h1MomCol,     text_size = size.normal)
-    table.cell(pan, 0, 7, "ADX", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 7, str.tostring(adxVal[1], "#.##"), text_color = color.silver, text_size = size.normal)
-    //--- LAST SIGNAL
-    table.cell(pan, 0, 8, "— LAST SIGNAL —", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 8, "",               text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 9, "SIGNAL", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 9, sigTxt,   text_color = sigColor,     text_size = size.large)
-    table.cell(pan, 0, 10, "SCORE", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 10, na(lastSigBar) ? "—" : str.tostring(lastScore) + "/" + str.tostring(lastMax), text_color = color.silver, text_size = size.normal)
-    table.cell(pan, 0, 11, "ENTRY", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 11, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
-    table.cell(pan, 0, 12, "SL", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 12, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
-    table.cell(pan, 0, 13, "TP1", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 13, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
-    table.cell(pan, 0, 14, "TP2", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 14, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
-    table.cell(pan, 0, 15, "RISK", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 15, na(lastRiskAtr) ? "--" : str.tostring(lastRiskAtr, "#.##") + " ATR", text_color = color.white, text_size = size.normal)
-    table.cell(pan, 0, 16, "R:R", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 16, na(lastRR1) ? "--" : str.tostring(lastRR1, "#.##") + " / " + str.tostring(lastRR2, "#.##"), text_color = color.white, text_size = size.normal)
-    //--- Config warning (reason shown when inputs are inconsistent)
-    table.cell(pan, 0, 17, configOk ? "" : "CONFIG", text_color = color.red, text_size = size.small)
-    table.cell(pan, 1, 17, configOk ? "" : cfgReason, text_color = color.red, text_size = size.small)
+    //--- Trend (dominant context)
+    table.cell(pan, 0, 1, "TREND", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 1, trendTxt, text_color = trendColor, text_size = size.normal)
+    //--- Signal (visually dominant)
+    table.cell(pan, 0, 2, "SIGNAL", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 2, sigTxt, text_color = sigColor, text_size = size.large)
+    //--- Score (neutral - information, not a separate visual state)
+    table.cell(pan, 0, 3, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 3, na(lastSigBar) ? "—" : str.tostring(lastScore) + "/" + str.tostring(lastMax), text_color = color.silver, text_size = size.normal)
+    //--- Position levels
+    table.cell(pan, 0, 4, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 4, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
+    table.cell(pan, 0, 5, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 5, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
+    table.cell(pan, 0, 6, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 6, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = tpCol, text_size = size.normal)
+    table.cell(pan, 0, 7, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 7, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = tpCol, text_size = size.normal)
+    table.cell(pan, 0, 8, "RISK", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 8, na(lastRiskAtr) ? "--" : str.tostring(lastRiskAtr, "#.##") + " ATR", text_color = color.white, text_size = size.normal)
+    table.cell(pan, 0, 9, "R:R", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 9, na(lastRR1) ? "--" : str.tostring(lastRR1, "#.##") + " / " + str.tostring(lastRR2, "#.##"), text_color = color.white, text_size = size.normal)
+    //--- Compact context footer (TF role · 1H state · ADX) with the
+    //--- status; reason only appears when it matters (blocked TF /
+    //--- config error), so no blank rows are wasted on normal charts.
+    table.cell(pan, 0, 10, ctxTxt, text_color = ctxCol, text_size = size.small)
+    table.cell(pan, 1, 10, statTxt, text_color = statCol, text_size = size.small)
 else
     if not na(pan)
         table.delete(pan)
@@ -803,7 +801,7 @@ else
 //--------------------------------------------------------------
 audDirTxt   = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
               lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
-audSigCol   = lastSigType > 0 ? color.lime : lastSigType < 0 ? color.red : color.silver
+audSigCol   = lastSigType > 0 ? color.green : lastSigType < 0 ? color.red : color.silver
 audHas      = not na(lastSigBar)
 audScoreTxt = audHas ? str.tostring(lastScore) + " / " + str.tostring(lastMax) : "—"
 
@@ -822,7 +820,7 @@ slopeDirTxt = audHas ? (audEma50 > audEma50Prev ? "rising" : audEma50 < audEma50
 signalTfTxt     = isM15 ? "15M" : isH1chart ? "1H" : isH4chart ? "4H" : str.tostring(timeframe.period)
 entryTfTxt      = isM15 ? "M15 ENTRY" : isH1chart ? "1H ENTRY" : isH4chart ? "4H ENTRY" : "ENTRY"
 audModeTxt      = isSupportedSignalTF ? "ENABLED" : "DISABLED"
-audModeCol      = isSupportedSignalTF ? color.lime : color.red
+audModeCol      = isSupportedSignalTF ? color.green : color.red
 audConfirmedTxt = isSupportedSignalTF ? "YES - closed candle" : "NO - signals disabled"
 
 //--- Rejection reason (audit only): for a fresh confirmed crossover on a
@@ -1336,34 +1334,34 @@ if auditMode and isSupportedSignalTF
     table.cell(aud, 1, 5, audScoreTxt, text_color = color.silver, text_size = size.normal)
     //--- 4H trend
     table.cell(aud, 0, 6, "4H TREND", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 6, audTrendTxt, text_color = audHas ? (audTrendOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 1, 6, audTrendTxt, text_color = audHas ? (audTrendOk ? color.green : color.red) : color.silver, text_size = size.small)
     table.cell(aud, 0, 7, "EMA50 / EMA200", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 7, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma200) ? "--" : str.tostring(audEma200, format.mintick)), text_color = color.silver, text_size = size.small)
     //--- 4H slope
     table.cell(aud, 0, 8, "4H SLOPE", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 8, audSlopeTxt + (audHas ? "  (" + slopeDirTxt + ")" : ""), text_color = audHas ? (audSlopeOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 1, 8, audSlopeTxt + (audHas ? "  (" + slopeDirTxt + ")" : ""), text_color = audHas ? (audSlopeOk ? color.green : color.red) : color.silver, text_size = size.small)
     table.cell(aud, 0, 9, "EMA50 cur/prev", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 9, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma50Prev) ? "--" : str.tostring(audEma50Prev, format.mintick)), text_color = color.silver, text_size = size.small)
     //--- 1H confirmation
     table.cell(aud, 0, 10, "1H CONF", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 10, audH1Txt, text_color = audHas ? (audH1Ok ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 1, 10, audH1Txt, text_color = audHas ? (audH1Ok ? color.green : color.red) : color.silver, text_size = size.small)
     table.cell(aud, 0, 11, "1H EMA fast/slow", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 11, (na(audH1Fast) ? "--" : str.tostring(audH1Fast, format.mintick)) + " / " + (na(audH1Slow) ? "--" : str.tostring(audH1Slow, format.mintick)), text_color = color.silver, text_size = size.small)
     //--- Entry trigger (on the chart TF)
     table.cell(aud, 0, 12, entryTfTxt, text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 12, audCrossTxt, text_color = audHas ? (audCrossOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 1, 12, audCrossTxt, text_color = audHas ? (audCrossOk ? color.green : color.red) : color.silver, text_size = size.small)
     table.cell(aud, 0, 13, "EMA9 / EMA21", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 13, (na(audEmaF) ? "--" : str.tostring(audEmaF, format.mintick)) + " / " + (na(audEmaS) ? "--" : str.tostring(audEmaS, format.mintick)), text_color = color.silver, text_size = size.small)
     //--- ADX
     table.cell(aud, 0, 14, "ADX", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 14, audAdxTxt, text_color = audHas ? (audAdxOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 1, 14, audAdxTxt, text_color = audHas ? (audAdxOk ? color.green : color.red) : color.silver, text_size = size.small)
     table.cell(aud, 0, 15, "ADX val / min", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 15, (na(audAdx) ? "--" : str.tostring(audAdx, "#.##")) + " / " + (na(audAdxMin) ? "--" : str.tostring(audAdxMin, "#.##")), text_color = color.silver, text_size = size.small)
     //--- Volatility / volume (rows show a contribution only when the weight is enabled)
     table.cell(aud, 0, 16, "VOLATILITY", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 16, atrVolWeight > 0 ? audVolTxt : "", text_color = audHas ? (audVolOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 1, 16, atrVolWeight > 0 ? audVolTxt : "", text_color = audHas ? (audVolOk ? color.green : color.red) : color.silver, text_size = size.small)
     table.cell(aud, 0, 17, "VOLUME", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 17, volWeight > 0 ? audVolConfTxt : "", text_color = audHas ? (audVolConfOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 1, 17, volWeight > 0 ? audVolConfTxt : "", text_color = audHas ? (audVolConfOk ? color.green : color.red) : color.silver, text_size = size.small)
     //--- Total (exact existing score)
     table.cell(aud, 0, 18, "TOTAL", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 18, audScoreTxt, text_color = color.white, text_size = size.normal)
@@ -1381,11 +1379,11 @@ if auditMode and isSupportedSignalTF
     table.cell(aud, 0, 24, "RISK ATR", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 24, na(lastRiskAtr) ? "--" : str.tostring(lastRiskAtr, "#.##") + " ATR", text_color = color.white, text_size = size.normal)
     table.cell(aud, 0, 25, "TP1", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 25, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
+    table.cell(aud, 1, 25, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = tpCol, text_size = size.normal)
     table.cell(aud, 0, 26, "TP1 R", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 26, na(lastRR1) ? "--" : str.tostring(lastRR1, "#.##"), text_color = color.silver, text_size = size.small)
     table.cell(aud, 0, 27, "TP2", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 27, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
+    table.cell(aud, 1, 27, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = tpCol, text_size = size.normal)
     table.cell(aud, 0, 28, "TP2 R", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 28, na(lastRR2) ? "--" : str.tostring(lastRR2, "#.##"), text_color = color.silver, text_size = size.small)
     table.cell(aud, 0, 29, "R:R", text_color = color.silver, text_size = size.small)
@@ -1394,7 +1392,7 @@ if auditMode and isSupportedSignalTF
     table.cell(aud, 0, 30, "BAR", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 30, syminfo.ticker + " " + timeframe.period + "  " + (na(audBarTime) ? "--" : str.tostring(audBarTime, "yyyy-MM-dd HH:mm")), text_color = color.silver, text_size = size.small)
     table.cell(aud, 0, 31, "CONFIRMED", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 31, audConfirmedTxt, text_color = color.lime, text_size = size.small)
+    table.cell(aud, 1, 31, audConfirmedTxt, text_color = color.green, text_size = size.small)
 
 //--- Cleanup when the mode is off
 if not auditMode
@@ -1457,9 +1455,9 @@ if decisionLogger
     table.cell(diagDetTbl, 0, 0, "— DECISION LOG —", text_color = color.white, text_size = size.small)
     table.cell(diagDetTbl, 1, 0, "", text_color = color.white, text_size = size.small)
     table.cell(diagDetTbl, 0, 1, "EVENT", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 1, evHeadTxt, text_color = devResult == "SIGNAL" ? color.lime : color.white, text_size = size.small)
+    table.cell(diagDetTbl, 1, 1, evHeadTxt, text_color = devResult == "SIGNAL" ? color.green : color.white, text_size = size.small)
     table.cell(diagDetTbl, 0, 2, "DECISION", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 2, hasEv ? devDecision : "—", text_color = hasEv ? (devDecision == "REJECTED" ? color.red : color.lime) : color.silver, text_size = size.normal)
+    table.cell(diagDetTbl, 1, 2, hasEv ? devDecision : "—", text_color = hasEv ? (devDecision == "REJECTED" ? color.red : color.green) : color.silver, text_size = size.normal)
     table.cell(diagDetTbl, 0, 3, "REASON", text_color = color.silver, text_size = size.small)
     table.cell(diagDetTbl, 1, 3, hasEv ? (devReason == "" ? "—" : devReason) : "—", text_color = color.red, text_size = size.small)
     table.cell(diagDetTbl, 0, 4, "4H", text_color = color.silver, text_size = size.small)
@@ -1511,37 +1509,37 @@ if decisionLogger
     table.cell(gateTbl, 0, 0, "— GATE STATUS —", text_color = color.white, text_size = size.small)
     table.cell(gateTbl, 1, 0, "", text_color = color.white, text_size = size.small)
     table.cell(gateTbl, 0, 1, "4H REGIME", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 1, gsRegime, text_color = gsRegime == "PASS" ? color.lime : gsRegime == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 1, gsRegime, text_color = gsRegime == "PASS" ? color.green : gsRegime == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 2, "4H SLOPE", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 2, gsSlope, text_color = gsSlope == "PASS" ? color.lime : gsSlope == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 2, gsSlope, text_color = gsSlope == "PASS" ? color.green : gsSlope == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 3, "4H SEPARATION", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 3, gsSep, text_color = gsSep == "PASS" ? color.lime : gsSep == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 3, gsSep, text_color = gsSep == "PASS" ? color.green : gsSep == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 4, "1H STRUCTURE", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 4, gsH1Struct, text_color = gsH1Struct == "PASS" ? color.lime : gsH1Struct == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 4, gsH1Struct, text_color = gsH1Struct == "PASS" ? color.green : gsH1Struct == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 5, "1H MOMENTUM", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 5, gsH1Mom, text_color = gsH1Mom == "PASS" ? color.lime : gsH1Mom == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 5, gsH1Mom, text_color = gsH1Mom == "PASS" ? color.green : gsH1Mom == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 6, "ENTRY STRUCTURE", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 6, gsEntrySt, text_color = gsEntrySt == "PASS" ? color.lime : gsEntrySt == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 6, gsEntrySt, text_color = gsEntrySt == "PASS" ? color.green : gsEntrySt == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 7, "ENTRY POSITION", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 7, gsEntryPos, text_color = gsEntryPos == "PASS" ? color.lime : gsEntryPos == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 7, gsEntryPos, text_color = gsEntryPos == "PASS" ? color.green : gsEntryPos == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 8, "EMA EXPANSION", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 8, gsEmaExp, text_color = gsEmaExp == "PASS" ? color.lime : gsEmaExp == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 8, gsEmaExp, text_color = gsEmaExp == "PASS" ? color.green : gsEmaExp == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 9, "TRIGGER", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 9, gsTrigger, text_color = gsTrigger == "PASS" ? color.lime : gsTrigger == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 9, gsTrigger, text_color = gsTrigger == "PASS" ? color.green : gsTrigger == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 10, "CANDLE", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 10, gsCandle, text_color = gsCandle == "PASS" ? color.lime : gsCandle == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 10, gsCandle, text_color = gsCandle == "PASS" ? color.green : gsCandle == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 11, "ADX", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 11, gsAdx, text_color = gsAdx == "PASS" ? color.lime : gsAdx == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 11, gsAdx, text_color = gsAdx == "PASS" ? color.green : gsAdx == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 12, "VOLATILITY", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 12, gsVol, text_color = gsVol == "PASS" ? color.lime : gsVol == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 12, gsVol, text_color = gsVol == "PASS" ? color.green : gsVol == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 13, "CHASING", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 13, gsChase, text_color = gsChase == "PASS" ? color.lime : gsChase == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 13, gsChase, text_color = gsChase == "PASS" ? color.green : gsChase == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 14, "RISK", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 14, gsRisk, text_color = gsRisk == "PASS" ? color.lime : gsRisk == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 14, gsRisk, text_color = gsRisk == "PASS" ? color.green : gsRisk == "FAIL" ? color.red : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 15, "SCORE", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 15, gsScore, text_color = hasEv ? (devGateScore ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 15, gsScore, text_color = hasEv ? (devGateScore ? color.green : color.red) : color.silver, text_size = size.small)
     table.cell(gateTbl, 0, 16, "DECISION", text_color = color.silver, text_size = size.small)
-    table.cell(gateTbl, 1, 16, hasEv ? devDecision : "N/A", text_color = hasEv ? (devDecision == "REJECTED" ? color.red : color.lime) : color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 16, hasEv ? devDecision : "N/A", text_color = hasEv ? (devDecision == "REJECTED" ? color.red : color.green) : color.silver, text_size = size.small)
 
     //--- Decision statistics (which filter kills the most setups)
     if na(statsTbl)
@@ -1551,7 +1549,7 @@ if decisionLogger
     table.cell(statsTbl, 0, 1, "CANDIDATES", text_color = color.silver, text_size = size.small)
     table.cell(statsTbl, 1, 1, str.tostring(stCand), text_color = color.white, text_size = size.small)
     table.cell(statsTbl, 0, 2, "SIGNALS", text_color = color.silver, text_size = size.small)
-    table.cell(statsTbl, 1, 2, str.tostring(stSig), text_color = color.lime, text_size = size.small)
+    table.cell(statsTbl, 1, 2, str.tostring(stSig), text_color = color.green, text_size = size.small)
     table.cell(statsTbl, 0, 3, "REJECTED", text_color = color.silver, text_size = size.small)
     table.cell(statsTbl, 1, 3, str.tostring(stRej), text_color = color.red, text_size = size.small)
     table.cell(statsTbl, 0, 4, "4H REGIME", text_color = color.silver, text_size = size.small)
