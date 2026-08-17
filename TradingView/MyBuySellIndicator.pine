@@ -729,6 +729,8 @@ panelH1Slow = isH1chart ? h1SlowS[1] : h1SlowH
 //--- Position-level colors: entry neutral, SL red, TP directional
 //--- (green for a BUY position, red for a SELL position).
 tpCol   = lastSigType > 0 ? color.green : lastSigType < 0 ? color.red : color.silver
+//--- 1H state (stable, confirmed values) - used by the footer below
+h1MomTxt = panelH1Fast > panelH1Slow ? "BULLISH" : panelH1Fast < panelH1Slow ? "BEARISH" : "NEUTRAL"
 //--- Compact context footer: TF role + 1H state + ADX. The status /
 //--- reason text only turns red when it actually matters (blocked
 //--- timeframe or config error) - no blank rows on supported charts.
@@ -743,8 +745,6 @@ panelSepOk = math.abs(panelE50 - panelE200) / math.max(panelE200, 1e-10) * 100 >
 panelRegUp = panelE50 > panelE200 and panelE50 > panelE50Prev and panelSepOk
 panelRegDn = panelE50 < panelE200 and panelE50 < panelE50Prev and panelSepOk
 trendTxt = panelRegUp ? "BULLISH" : panelRegDn ? "BEARISH" : "NEUTRAL"
-h1MomTxt = panelH1Fast > panelH1Slow ? "BULLISH" : panelH1Fast < panelH1Slow ? "BEARISH" : "NEUTRAL"
-h1MomCol = h1MomTxt == "BULLISH" ? color.green : h1MomTxt == "BEARISH" ? color.red : color.silver
 
 sigTxt = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
          lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"

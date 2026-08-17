@@ -8,6 +8,8 @@ Date: 2026-08-17
 
 **Presentation-only release. Trading logic is unchanged.**
 
+- **Build compatibility fix:** the compact panel's context footer referenced `h1MomTxt` before it was declared (`Undeclared identifier 'h1MomTxt'` on the target Pine build) — the definition now precedes the footer, and the unused `h1MomCol` variable was removed. Presentation-only; zero trading-logic change.
+
 - **Color system reduced to 5 roles:** GREEN = bullish / BUY / PASS · RED = bearish / SELL / FAIL · WHITE = primary neutral values · SILVER = secondary/context/labels · neutral identification colors for the EMA lines. Removed all semantic use of `lime`, `teal`, `fuchsia`, and blue-as-direction.
 - **Markers:** BUY / STRONG BUY are now **green** (were lime); SELL / STRONG SELL remain red. The latest-signal score label uses green for BUY / red for SELL (was lime).
 - **Position levels:** ENTRY line/label is now **white/neutral** (was blue); SL stays red; TP1 and TP2 now share **one directional color** — green for a BUY position, red for a SELL position (previously TP1 green / TP2 teal, which was not direction-consistent).
