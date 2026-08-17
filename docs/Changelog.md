@@ -2,6 +2,10 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## Build compatibility fix (after v3.2.0)
+
+- The target Pine build does not provide the bare `lowest()` / `highest()` functions (`Could not find function or function reference 'lowest'`). The Phase 2 structural-SL swing is now computed with the namespaced `ta.lowest(low, swingLookback)[1]` / `ta.highest(high, swingLookback)[1]` — identical values, zero logic change (same pattern as the earlier `abs()` → `math.abs()` fix).
+
 ## v3.2.0 — Signal Diagnostic Mode: event logger + outcome tracker
 
 Date: 2026-08-17

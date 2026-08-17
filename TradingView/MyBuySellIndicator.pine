@@ -330,8 +330,8 @@ atrUsable = not na(atrVal) and atrVal > 0
 //--- Structural swings: previously completed bars ONLY. The [1] is
 //--- mandatory - the forming signal candle must never define its
 //--- own structural swing (no repaint, no lookahead).
-swingLow  = lowest(low,  swingLookback)[1]
-swingHigh = highest(high, swingLookback)[1]
+swingLow  = ta.lowest(low,  swingLookback)[1]
+swingHigh = ta.highest(high, swingLookback)[1]
 
 //--- Raw structural stops (may be tight/invalid; the final SL below
 //--- falls back to ATR when the structure is too tight)
