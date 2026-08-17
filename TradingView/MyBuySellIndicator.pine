@@ -332,7 +332,7 @@ var int    audVolPts     = 0
 var int    audVolConfPts = 0
 var float  audH1Fast     = na
 var float  audH1Slow     = na
-var datetime audBarTime  = na
+var int    audBarTime    = na
 
 //--------------------------------------------------------------
 // On a new confirmed BUY / STRONG BUY: remember + redraw levels

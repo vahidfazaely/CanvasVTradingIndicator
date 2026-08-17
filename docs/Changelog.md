@@ -12,6 +12,7 @@ Date: 2026-08-17
 - **Signal Audit Mode** now renders on any chart: it always shows `SIGNAL TF` (15M/1H/4H or the chart TF) and `SIGNAL MODE` (ENABLED/DISABLED, with the reason on blocked charts). On supported timeframes it keeps the full detail rows (4H trend/slope, 1H conf, entry trigger, ADX, score breakdown, ATR levels, signal bar) with a dynamic entry label and `CONFIRMED YES - closed candle`.
 - **Alerts** inherit the gate: `buySig`/`sellSig` require `isSupportedSignalTF`, so blocked timeframes can never fire the `alert()` calls or the `alertcondition`s.
 - **Preserved:** scoring formulas, ATR Entry/SL/TP1/TP2 (1.5/1.5/3.0), ADX/EMA calculations, the four single-line `request.security` H4 calls + two single-line 1H calls (all `lookahead_off`), closed-candle discipline, config validation, and all Pine build-compatibility constraints. MT5 code untouched.
+- **Build compatibility fix:** the audit snapshot `audBarTime` was declared with the `datetime` type keyword, which the target Pine build rejects (`'datetime' is not a valid type keyword`). Timestamps are plain `int` in Pine, so it is now `var int audBarTime = na` — same value (`time`), same `format.timestamp` display, no logic change.
 
 ## v2.3.0 — Three-layer TF architecture (4H trend + 1H confirmation + 15M entry)
 
