@@ -14,6 +14,7 @@
 //|  v3.3.0 - Signal Decision Logger: first-failure chain + statistics |
 //|  v3.4.0 - UI/UX cleanup: simplified color system + compact panel   |
 //|  v3.4.1 - Observability: logger context fields (diagnostic only)  |
+//|  v3.4.2 - Workflow: CVOUT resolution alerts + CVLOG time fields   |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -46,7 +47,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v3.4.1"
+VERSION = "v3.4.2"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -968,7 +969,7 @@ var int stRisk = 0
 var int stScore = 0
 
 //==============================================================
-// PHASE 4A OBSERVABILITY MEASUREMENTS (v3.4.1) - observation only
+// PHASE 4A OBSERVABILITY MEASUREMENTS (v3.4.1, extended v3.4.2) - observation only
 //  New diagnostic fields capture market CONTEXT around candidates
 //  and signal resolution. NONE of these values feed back into any
 //  gate, score, or signal - pure data collection for the BTCUSD
@@ -1189,6 +1190,9 @@ if decisionLogger and isCandidateUp
         array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m) H4 " + resH4 + " H1 " + resH1 + " ALIGN " + resAlign + " MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
         if array.size(outLog) > 20
             array.remove(outLog, 0)
+        //--- CVOUT alert: machine-readable resolution record (diagnostic only)
+        if enableDiagAlerts
+            alert("CVOUT|" + syminfo.ticker + "|" + timeframe.period + "|" + trDir + "|" + trOutcome + "|" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m|MFE=+" + str.tostring(trMFE, "#.##") + "R|MAE=-" + str.tostring(trMAE, "#.##") + "R|R=" + (na(trFinalR) ? "--" : str.tostring(trFinalR, "#.##")) + "|H4=" + resH4 + "|H1=" + resH1 + "|ALIGN=" + resAlign + "|E=" + str.tostring(trEntry, format.mintick) + "|SL=" + str.tostring(trSL, format.mintick) + "|TP1=" + str.tostring(trTP1, format.mintick) + "|TP2=" + str.tostring(trTP2, format.mintick) + "|T=" + str.tostring(trTime, "MM-dd HH:mm"), alert.freq_once_per_bar_close)
     if buySig
         prevSigBar := bar_index
         trActive  := true
@@ -1211,7 +1215,7 @@ if decisionLogger and isCandidateUp
 
     //--- Optional CVLOG alert (separate from trading alerts; default off)
     if enableDiagAlerts
-        alert("CVLOG|" + syminfo.ticker + "|" + timeframe.period + "|BUY|" + devResult + "|" + str.tostring(buyScore) + "|" + (devReason == "" ? "OK" : devReason) + "|ADX=" + str.tostring(adxVal, "#.##") + "|ATR=" + str.tostring(atrVal, "#.##") + "|RISK=" + str.tostring(riskAtrBuy, "#.##") + "A|RR=" + str.tostring(rrTp1Buy, "#.##") + "/" + str.tostring(rrTp2Buy, "#.##") + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slBuy, format.mintick) + "|TP1=" + str.tostring(tp1Buy, format.mintick) + "|TP2=" + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
+        alert("CVLOG|" + syminfo.ticker + "|" + timeframe.period + "|BUY|" + devResult + "|" + str.tostring(buyScore) + "|" + (devReason == "" ? "OK" : devReason) + "|ADX=" + str.tostring(adxVal, "#.##") + "|ATR=" + str.tostring(atrVal, "#.##") + "|RISK=" + str.tostring(riskAtrBuy, "#.##") + "A|RR=" + str.tostring(rrTp1Buy, "#.##") + "/" + str.tostring(rrTp2Buy, "#.##") + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slBuy, format.mintick) + "|TP1=" + str.tostring(tp1Buy, format.mintick) + "|TP2=" + str.tostring(tp2Buy, format.mintick) + "|T=" + str.tostring(time, "MM-dd HH:mm"), alert.freq_once_per_bar_close)
 
 //--- Capture SELL candidate events (mirrored)
 if decisionLogger and isCandidateDn
@@ -1363,6 +1367,9 @@ if decisionLogger and isCandidateDn
         array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> SUPERSEDED (" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m) H4 " + resH4 + " H1 " + resH1 + " ALIGN " + resAlign + " MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R")
         if array.size(outLog) > 20
             array.remove(outLog, 0)
+        //--- CVOUT alert: machine-readable resolution record (diagnostic only)
+        if enableDiagAlerts
+            alert("CVOUT|" + syminfo.ticker + "|" + timeframe.period + "|" + trDir + "|" + trOutcome + "|" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m|MFE=+" + str.tostring(trMFE, "#.##") + "R|MAE=-" + str.tostring(trMAE, "#.##") + "R|R=" + (na(trFinalR) ? "--" : str.tostring(trFinalR, "#.##")) + "|H4=" + resH4 + "|H1=" + resH1 + "|ALIGN=" + resAlign + "|E=" + str.tostring(trEntry, format.mintick) + "|SL=" + str.tostring(trSL, format.mintick) + "|TP1=" + str.tostring(trTP1, format.mintick) + "|TP2=" + str.tostring(trTP2, format.mintick) + "|T=" + str.tostring(trTime, "MM-dd HH:mm"), alert.freq_once_per_bar_close)
     if sellSig
         prevSigBar := bar_index
         trActive  := true
@@ -1385,7 +1392,7 @@ if decisionLogger and isCandidateDn
 
     //--- Optional CVLOG alert (mirrored)
     if enableDiagAlerts
-        alert("CVLOG|" + syminfo.ticker + "|" + timeframe.period + "|SELL|" + devResult + "|" + str.tostring(sellScore) + "|" + (devReason == "" ? "OK" : devReason) + "|ADX=" + str.tostring(adxVal, "#.##") + "|ATR=" + str.tostring(atrVal, "#.##") + "|RISK=" + str.tostring(riskAtrSell, "#.##") + "A|RR=" + str.tostring(rrTp1Sell, "#.##") + "/" + str.tostring(rrTp2Sell, "#.##") + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slSell, format.mintick) + "|TP1=" + str.tostring(tp1Sell, format.mintick) + "|TP2=" + str.tostring(tp2Sell, format.mintick), alert.freq_once_per_bar_close)
+        alert("CVLOG|" + syminfo.ticker + "|" + timeframe.period + "|SELL|" + devResult + "|" + str.tostring(sellScore) + "|" + (devReason == "" ? "OK" : devReason) + "|ADX=" + str.tostring(adxVal, "#.##") + "|ATR=" + str.tostring(atrVal, "#.##") + "|RISK=" + str.tostring(riskAtrSell, "#.##") + "A|RR=" + str.tostring(rrTp1Sell, "#.##") + "/" + str.tostring(rrTp2Sell, "#.##") + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slSell, format.mintick) + "|TP1=" + str.tostring(tp1Sell, format.mintick) + "|TP2=" + str.tostring(tp2Sell, format.mintick) + "|T=" + str.tostring(time, "MM-dd HH:mm"), alert.freq_once_per_bar_close)
 
 //--- Post-signal outcome tracking (confirmed bars AFTER the signal
 //--- bar only; MFE/MAE in R; TP/SL hits; outcome classification).
@@ -1450,6 +1457,9 @@ if decisionLogger and trActive and isConfirmed and bar_index > trBar
         array.push(outLog, str.tostring(trTime, "MM-dd HH:mm") + " " + trDir + " E" + str.tostring(trEntry, format.mintick) + " -> " + trOutcome + " (" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m) H4 " + resH4 + " H1 " + resH1 + " ALIGN " + resAlign + " MFE +" + str.tostring(trMFE, "#.##") + "R MAE -" + str.tostring(trMAE, "#.##") + "R R " + (na(trFinalR) ? "--" : str.tostring(trFinalR, "#.##")))
         if array.size(outLog) > 20
             array.remove(outLog, 0)
+        //--- CVOUT alert: machine-readable resolution record (diagnostic only)
+        if enableDiagAlerts
+            alert("CVOUT|" + syminfo.ticker + "|" + timeframe.period + "|" + trDir + "|" + trOutcome + "|" + str.tostring(trElapsed) + "b " + str.tostring(trElapsed * tfSec / 60, "#") + "m|MFE=+" + str.tostring(trMFE, "#.##") + "R|MAE=-" + str.tostring(trMAE, "#.##") + "R|R=" + (na(trFinalR) ? "--" : str.tostring(trFinalR, "#.##")) + "|H4=" + resH4 + "|H1=" + resH1 + "|ALIGN=" + resAlign + "|E=" + str.tostring(trEntry, format.mintick) + "|SL=" + str.tostring(trSL, format.mintick) + "|TP1=" + str.tostring(trTP1, format.mintick) + "|TP2=" + str.tostring(trTP2, format.mintick) + "|T=" + str.tostring(trTime, "MM-dd HH:mm"), alert.freq_once_per_bar_close)
 
 var table aud = na
 

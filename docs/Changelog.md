@@ -2,6 +2,17 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v3.4.2 — Workflow: CVOUT resolution alerts + CVLOG time fields
+
+Date: 2026-08-17
+
+**Observability/workflow release. Trading logic is unchanged.**
+
+- **CVOUT resolution alerts:** every resolved signal (`SL FIRST` / `TP1 FIRST` / `TP2 FIRST` / `AMBIGUOUS` / `EXPIRED` / `SUPERSEDED`) now emits a machine-readable `CVOUT|...` alert line via the same `alert()` mechanism and the same `Enable diagnostic CVLOG alerts` toggle. It carries the outcome, resolution bars/time, MFE/MAE in R, final R, H4 and 1H state at the resolution candle, `ALIGNMENT INTACT/BROKEN`, Entry/SL/TP1/TP2, and the signal bar time — so outcomes can be collected as text instead of on-chart screenshots.
+- **CVLOG time field:** signal-time CVLOG lines now include `|T=<bar time>` so each CVOUT can be joined back to its originating CVLOG.
+- **Workflow helpers (repo only, not in Pine):** `scripts/copy-pine-to-clipboard.bat` (one-click copy of the Pine source for pasting into the Pine Editor) and `scripts/append-clipboard-to-log.bat` (appends copied CVLOG/CVOUT lines to `logs/cvlog.txt`); `logs/README.md` documents the format and the collection procedure.
+- **Unchanged (byte-verified vs v3.4.1):** every gate, score formula and threshold, `buySig`/`sellSig`, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all `request.security` calls (`lookahead_off`), repaint methodology, `alertcondition`s, trading alerts, and MT5. The only Pine changes are the version string, two extended alert-message strings, and three diagnostic alert emissions (one per resolution site).
+
 ## v3.4.1 — Observability: signal-decision context fields (Phase 4A)
 
 Date: 2026-08-17

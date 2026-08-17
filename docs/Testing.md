@@ -70,7 +70,7 @@ Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejec
 | 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
 | 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
 
-Restore defaults after each test (panel shows `v3.4.1`).
+Restore defaults after each test (panel shows `v3.4.2`).
 
 ## 2c. Signal Decision Logger / outcome logger tests (v3.3.0)
 

@@ -7,6 +7,8 @@
 
 # Logs
 *.log
+# Collected CVLOG/CVOUT data (runtime artifact, not source)
+logs/cvlog.txt
 
 # OS files
 .DS_Store
