@@ -6,10 +6,11 @@ All notable changes to CanvasV MTF Signal.
 
 Date: 2026-08-17
 
-- **Signal markers:** BUY/SELL now draw larger, readable green/red triangle markers with the direction and score on the marker (`BUY 75`, `STRONG BUY 100`); STRONG signals are larger and labeled. No extra chart text beyond the markers.
-- **New `Show signal labels` toggle** (Visuals group) — hides marker text, keeps the markers.
+- **Signal markers:** BUY/SELL now draw larger, readable green/red triangle markers with a direction label (`BUY`, `STRONG BUY`, `SELL`, `STRONG SELL`); STRONG signals are larger. The score appears on a latest-signal `Score 75` label and in the panel.
+- **New `Show signal labels` toggle** (Visuals group) — shows/hides the latest-signal score label; marker direction labels remain.
 - **Info panel redesign:** larger typography with hierarchy (title > signal > prices > labels); split into two clear sections — **MARKET** (H4 TREND, MOMENTUM, ADX) and **LAST SIGNAL** (SIGNAL large and colored, SCORE, ENTRY, SL, TP1, TP2). Removed the compact rows (symbol / timeframe / ATR / ✓✗ confirmations) to reduce clutter.
-- **Level labels:** ENTRY / SL / TP1 / TP2 labels enlarged with a subtle dark background for readability on light and dark charts. Latest-signal-only behavior unchanged.
+- **Level labels:** ENTRY / SL / TP1 / TP2 labels enlarged for readability. Latest-signal-only behavior unchanged.
+- **Build compatibility:** marker text uses constant strings (`plotshape` on the target Pine build rejects series-string text) and level labels use no `bgcolor` argument (unsupported on that build); the score is carried by `label.new`, which accepts dynamic text.
 - **Presentation only:** no changes to signal logic, scoring, HTF architecture, ATR levels, alerts, or repaint protection — verified by byte-level comparison of every logic line against v2.0.2.
 
 ## v2.0.2 — Renamed to CanvasV MTF Signal

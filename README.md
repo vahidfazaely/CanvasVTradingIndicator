@@ -34,7 +34,7 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 - **Configurable scoring weights** with a default equivalent to the original 100-point model (25/25/25/25, minimum 75), plus optional **STRONG BUY / STRONG SELL** (threshold 100).
 - **Optional quality filters** (all off by default): EMA separation %, price vs EMA 21, H4 momentum, ATR volatility regime, volume confirmation.
 - **Config validation:** EMA periods must satisfy Fast < Slow, not all weights can be zero, and the minimum score cannot exceed the maximum achievable score — otherwise signals are suppressed and the panel shows `CONFIG ERROR` with the reason.
-- **Visuals:** H4 EMAs, entry EMAs, BUY/SELL/STRONG markers with direction + score labels, the latest Entry/SL/TP1/TP2 lines, and a two-section info panel (MARKET / LAST SIGNAL) — every element individually toggleable (incl. signal labels).
+- **Visuals:** H4 EMAs, entry EMAs, BUY/SELL/STRONG markers with direction labels, a latest-signal score label, the latest Entry/SL/TP1/TP2 lines, and a two-section info panel (MARKET / LAST SIGNAL) — every element individually toggleable (incl. the score label).
 
 ## MT5 version
 

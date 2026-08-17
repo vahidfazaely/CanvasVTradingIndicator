@@ -228,10 +228,10 @@ plot(showEntryEMAs ? emaS   : na, "Entry EMA 21",color = color.new(color.fuchsia
 //--------------------------------------------------------------
 // Markers: BUY / STRONG BUY / SELL / STRONG SELL
 //--------------------------------------------------------------
-plotshape(showMarkers and buySig  and not strongBuy,  "BUY",         style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.normal, textcolor = color.lime, text = showSigLabels ? "BUY " + str.tostring(buyScore) : na)
-plotshape(showMarkers and strongBuy,                  "STRONG BUY",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.large,  textcolor = color.lime, text = showSigLabels ? "STRONG BUY " + str.tostring(buyScore) : na)
-plotshape(showMarkers and sellSig and not strongSell, "SELL",        style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.normal, textcolor = color.red, text = showSigLabels ? "SELL " + str.tostring(sellScore) : na)
-plotshape(showMarkers and strongSell,                 "STRONG SELL", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.large,  textcolor = color.red, text = showSigLabels ? "STRONG SELL " + str.tostring(sellScore) : na)
+plotshape(showMarkers and buySig  and not strongBuy,  "BUY",         style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.normal, textcolor = color.lime, text = "BUY")
+plotshape(showMarkers and strongBuy,                  "STRONG BUY",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.large,  textcolor = color.lime, text = "STRONG BUY")
+plotshape(showMarkers and sellSig and not strongSell, "SELL",        style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.normal, textcolor = color.red, text = "SELL")
+plotshape(showMarkers and strongSell,                 "STRONG SELL", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.large,  textcolor = color.red, text = "STRONG SELL")
 
 //--------------------------------------------------------------
 // Last-signal state (levels + panel)
@@ -244,6 +244,7 @@ var label lblEntry = na
 var label lblSL    = na
 var label lblTP1   = na
 var label lblTP2   = na
+var label lblSig    = na
 var int   lastSigType = 0       // 2 STRONG BUY, 1 BUY, -1 SELL, -2 STRONG SELL, 0 none
 var int   lastScore   = 0
 var int   lastMax     = 0
@@ -251,6 +252,8 @@ var float lastEntry   = na
 var float lastSL      = na
 var float lastTP1     = na
 var float lastTP2     = na
+var float lastSigHigh = na
+var float lastSigLow  = na
 var int   lastSigBar  = na
 
 //--------------------------------------------------------------
@@ -264,6 +267,8 @@ if buySig
     lastSL      := slBuy
     lastTP1     := tp1Buy
     lastTP2     := tp2Buy
+    lastSigHigh := high
+    lastSigLow  := low
     lastSigBar  := bar_index
 
     //--- Remove the previous signal's levels (na-safe: a signal may
@@ -284,6 +289,8 @@ if buySig
         label.delete(lblTP1)
     if not na(lblTP2)
         label.delete(lblTP2)
+    if not na(lblSig)
+        label.delete(lblSig)
 
     if showLevels
         lnEntry := line.new(bar_index, entry,  bar_index, entry,  extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
@@ -291,10 +298,13 @@ if buySig
         lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
         lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
 
-        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small, bgcolor = color.new(color.black, 70))
-        lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small, bgcolor = color.new(color.black, 70))
-        lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small, bgcolor = color.new(color.black, 70))
-        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small, bgcolor = color.new(color.black, 70))
+        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small)
+        lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+        lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
+        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small)
+
+    if showSigLabels
+        lblSig := label.new(bar_index, high, "Score " + str.tostring(buyScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.lime, size = size.small)
 
 //--------------------------------------------------------------
 // On a new confirmed SELL / STRONG SELL: remember + redraw levels
@@ -307,6 +317,8 @@ if sellSig
     lastSL      := slSell
     lastTP1     := tp1Sell
     lastTP2     := tp2Sell
+    lastSigHigh := high
+    lastSigLow  := low
     lastSigBar  := bar_index
 
     //--- Remove the previous signal's levels (na-safe)
@@ -326,6 +338,8 @@ if sellSig
         label.delete(lblTP1)
     if not na(lblTP2)
         label.delete(lblTP2)
+    if not na(lblSig)
+        label.delete(lblSig)
 
     if showLevels
         lnEntry := line.new(bar_index, entry,   bar_index, entry,   extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
@@ -333,10 +347,13 @@ if sellSig
         lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
         lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
 
-        lblEntry := label.new(bar_index, entry,   "ENTRY " + str.tostring(entry,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small, bgcolor = color.new(color.black, 70))
-        lblSL    := label.new(bar_index, slSell,  "SL "    + str.tostring(slSell,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small, bgcolor = color.new(color.black, 70))
-        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "   + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small, bgcolor = color.new(color.black, 70))
-        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "   + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small, bgcolor = color.new(color.black, 70))
+        lblEntry := label.new(bar_index, entry,   "ENTRY " + str.tostring(entry,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small)
+        lblSL    := label.new(bar_index, slSell,  "SL "    + str.tostring(slSell,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "   + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
+        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "   + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small)
+
+    if showSigLabels
+        lblSig := label.new(bar_index, low, "Score " + str.tostring(sellScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.small)
 
 //--------------------------------------------------------------
 // Live toggle of the level lines (showLevels changed)
@@ -378,10 +395,26 @@ else if showLevels != prevShowLevels
             lnTP1   := line.new(lastSigBar, lastTP1,    lastSigBar, lastTP1,    extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
             lnTP2   := line.new(lastSigBar, lastTP2,    lastSigBar, lastTP2,    extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
 
-            lblEntry := label.new(lastSigBar, lastEntry,  "ENTRY " + str.tostring(lastEntry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small, bgcolor = color.new(color.black, 70))
-            lblSL    := label.new(lastSigBar, lastSL,     "SL "    + str.tostring(lastSL,     format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small, bgcolor = color.new(color.black, 70))
-            lblTP1   := label.new(lastSigBar, lastTP1,    "TP1 "   + str.tostring(lastTP1,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small, bgcolor = color.new(color.black, 70))
-            lblTP2   := label.new(lastSigBar, lastTP2,    "TP2 "   + str.tostring(lastTP2,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small, bgcolor = color.new(color.black, 70))
+            lblEntry := label.new(lastSigBar, lastEntry,  "ENTRY " + str.tostring(lastEntry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small)
+            lblSL    := label.new(lastSigBar, lastSL,     "SL "    + str.tostring(lastSL,     format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+            lblTP1   := label.new(lastSigBar, lastTP1,    "TP1 "   + str.tostring(lastTP1,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
+            lblTP2   := label.new(lastSigBar, lastTP2,    "TP2 "   + str.tostring(lastTP2,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small)
+
+//--------------------------------------------------------------
+// Live toggle of the score label (showSigLabels changed)
+//--------------------------------------------------------------
+var bool prevShowSigLabels = na
+if na(prevShowSigLabels)
+    prevShowSigLabels := showSigLabels
+else if showSigLabels != prevShowSigLabels
+    prevShowSigLabels := showSigLabels
+    if not showSigLabels
+        if not na(lblSig)
+            label.delete(lblSig)
+            lblSig := na
+    else
+        if not na(lastSigBar)
+            lblSig := label.new(lastSigBar, lastSigType > 0 ? lastSigHigh : lastSigLow, "Score " + str.tostring(lastScore), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = lastSigType > 0 ? color.lime : color.red, size = size.small)
 
 //--------------------------------------------------------------
 // Alerts (once per confirmed signal, live bars only)
