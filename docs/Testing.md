@@ -70,16 +70,16 @@ Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejec
 | 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
 | 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
 
-Restore defaults after each test (panel shows `v3.2.0`).
+Restore defaults after each test (panel shows `v3.3.0`).
 
-## 2c. Signal diagnostic / outcome logger tests (v3.2.0)
+## 2c. Signal Decision Logger / outcome logger tests (v3.3.0)
 
-Diagnostic Mode is observational only — it must never change signal behavior. The `Diagnostics` input group: `Signal Diagnostic Mode` (off), `Diagnostic history size` (25/50/100), `Outcome tracking bars` (10/20/40), `Enable diagnostic CVLOG alerts` (off).
+The decision logger is observational only — it must never change signal behavior. The master toggle is `Signal Decision Logger` (Visuals group, off); the `Diagnostics` group holds `Diagnostic history size` (default 20), `Outcome tracking bars` (10/20/40), `Enable diagnostic CVLOG alerts` (off).
 
 | # | Test | How | Expected |
 |---|---|---|---|
-| A | Diagnostic OFF | Default settings; compare against v3.1.0 | **No behavioral change**: same signals, no extra labels/tables/arrows; the `Diagnostics` inputs are the only additions |
-| B | Diagnostic ON | Enable `Signal Diagnostic Mode` on 15m | `CANVASV DIAGNOSTICS` summary table + `— LAST DIAGNOSTIC —` detail table appear; events accumulate |
+| A | Logger OFF | Default settings; compare against v3.2.0 | **No behavioral change**: same signals, no extra labels/tables/arrows; the `Signal Decision Logger` input is the only addition |
+| B | Logger ON | Enable `Signal Decision Logger` on 15m | `RECENT DECISIONS` summary table + `— DECISION LOG —` detail + `— GATE STATUS —` + `— DIAGNOSTIC STATS —` tables appear; events accumulate |
 | C | Accepted signal | Wait for/scroll to a BUY or SELL | Event row `… SIGNAL <score> · E … · R …A · RR …`; detail `EVENT` reads `SIGNAL`; score/position rows match the panel and on-chart levels exactly |
 | D | Rejected candidate | Force a gate failure (e.g. `ADX Minimum` = 99) | Event row `… REJECTED · ADX`; detail `REASON` = `ADX` with the actual value (`ADX 14.2 ✗ (min 99)`); first failed gate only |
 | E | Score equality | On any event, compare detail `SCORE` with the panel score | Diagnostic score/max/breakdown **equal** the signal engine's `buyScore`/`sellScore`/`maxScore` (same variables, no recalculation) |
@@ -88,7 +88,26 @@ Diagnostic Mode is observational only — it must never change signal behavior. 
 | H | SL/TP ambiguity | Find a signal whose candle touches both SL and any TP | `OUTCOME` = `AMBIGUOUS` (order unknowable from OHLC); no invented intrabar ordering |
 | I | Reload determinism | Reload the chart with Diagnostic Mode on | The same historical events reappear in the same order with identical values (replayed from the same confirmed data) |
 | J | Supported TFs | Repeat B–H on 15m, 1H, 4H | Same behavior; `TRACK` counts entry-TF bars |
-| K | Blocked TF | Enable Diagnostic Mode on 5m/30m/2H | No events (0 events header), no REASON rows — the disabled engine generates no diagnostics; tables show empty state |
+| K | Blocked TF | Enable `Signal Decision Logger` on 5m/30m/2H | No events (0 events header), no REASON rows — the disabled engine generates no diagnostics; tables show empty state |
+
+## 2d. Signal Decision Logger verification (v3.3.0, BTCUSD 15M primary)
+
+With `Signal Decision Logger` ON, use the `RECENT DECISIONS` history, the `— DECISION LOG —` detail, the `— GATE STATUS —` table, and `— DIAGNOSTIC STATS —`:
+
+| # | Test | How | Expected |
+|---|---|---|---|
+| A | Actual BUY | Scroll to a historical BUY arrow | The decision log shows `DECISION = BUY` with the score and the exact Entry/SL/TP1/TP2/Risk that produced it; GATE STATUS shows all PASS up to the decision |
+| B | Actual SELL | Scroll to a historical SELL arrow | Same as A, mirrored (`DECISION = SELL`) |
+| C | Rejected crossover | Find an EMA 9/21 crossover that produced no signal | `DECISION = REJECTED` with the first failing gate and its actual value; GATE STATUS shows exactly one FAIL (the first), all earlier gates PASS |
+| D | High score, risk rejected | Force `Maximum risk (ATR)` low (e.g. 0.6) on an otherwise valid setup | `DECISION = REJECTED`, `REASON = RISK TOO LARGE`, `RISK ATR` row shows the actual risk vs the max |
+| E | High score, chasing | Force `Max entry distance` low (e.g. 0.1) | `REASON = CHASING`; `CHASE` row shows the actual distance in ATR |
+| F | ADX failure | Set `ADX Minimum` = 99 | `REASON = ADX`; ADX row shows the actual value below the minimum |
+| G | 4H regime failure | On a bearish 4H regime, evaluate a BUY crossover | `REASON = 4H REGIME` (or `4H SLOPE` / `4H SEPARATION`); the entry cannot fire against the regime |
+| H | Score failure | Set `Minimum Signal Score` = 100 with default weights (max 100) and find a passing-gates candidate | `DECISION = REJECTED`, `REASON = SCORE` (all gates PASS in GATE STATUS; only SCORE fails) |
+| I | Reload stability | Reload TradingView with the logger on | Historical decisions, gate statuses, stats, and event history are identical after reload (replayed from the same confirmed data) |
+| J | Timeframe stability | Switch 15M → 1H → 4H and back | No historical signal moves or changes; each timeframe logs its own candidates correctly |
+
+After collecting BTCUSD samples, use `— DIAGNOSTIC STATS —` to see which filter kills the most setups — **observe, do not optimize** (that is a later phase).
 
 ## 2b. Position / risk engine tests (Phase 2, v3.1.0)
 

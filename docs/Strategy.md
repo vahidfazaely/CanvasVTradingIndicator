@@ -253,14 +253,18 @@ Defaults `TP1_R = 1.0`, `TP2_R = 2.5`, so TP1 = exactly 1R and TP2 = exactly 2.5
 | Optional filters | all off |
 | Alerts | off |
 
-## 14. Signal diagnostic layer (v3.2.0) — observational, not a backtest
+## 14. Signal Decision Logger (v3.3.0) — observational, not a backtest
 
-The diagnostic system is a **data-collection tool** that observes the existing engine. It never alters the signal decision:
+The diagnostic system is a **data-collection tool** that observes the existing engine. It never alters the signal decision. The master input is `Signal Decision Logger` (Visuals group, default off); when off the script is byte-identical to v3.2.0 except the version string.
 
-- **Event logger:** every confirmed candidate evaluation on a supported timeframe (15m/1H/4H) is recorded with the exact values the engine used — 4H regime (EMA50/200, separation %, slope), 1H (EMA21/50, close, structure/momentum), entry (EMA9/21, gap + previous gap, gap expansion), candle (direction, body %, range), quality (ADX, ATR, ATR%, chasing distance), score breakdown, and position (Entry/SL/TP1/TP2/Risk/RiskATR/R:R). All values are the existing engine variables — nothing is recalculated.
-- **First-failed-gate logging:** rejected candidates show the precise gate and observed value (`ADX 14.2 ✗ (min 99)`, `CHASE 2.13A ✗`, `RISK 3.12A > 2.50A`), derived only from existing gate booleans.
+- **Candidate definition:** a **candidate** is a confirmed candle on a supported timeframe (15m/1H/4H) with a fresh EMA 9/21 crossover (BUY) or crossunder (SELL) — the existing entry trigger. Candles without a crossover are not logged (no flood of irrelevant bars).
+- **First-failure chain:** candidates are evaluated in the engine's actual order and the **first failing condition** is recorded: `4H REGIME` → `4H SLOPE` → `4H SEPARATION` → `1H STRUCTURE` → `1H MOMENTUM` → `ENTRY STRUCTURE` → `ENTRY POSITION` → `EMA EXPANSION` → `NO TRIGGER` → `CANDLE DIRECTION` → `CANDLE BODY` → `ADX` → `VOLATILITY` → `CHASING` → `OPTIONAL FILTERS` → `ATR INVALID` → `SCORE` → `RISK TOO LARGE` / `INVALID STRUCTURE` (SELL mirrored). `NO TRIGGER` is defined for completeness; logged candidates always have a trigger, so it cannot be the first failure of a logged event. The chain distinguishes **rejected before scoring** (gate failure) from **all gates passed but score insufficient** (`SCORE`) from **signal fired** (`DECISION = BUY/SELL`).
+- **Event logger:** every candidate is recorded with the exact values the engine used — 4H regime (EMA50/200, separation %, slope direction), 1H (EMA21/50, close, structure/momentum), entry (EMA9/21, gap + previous gap, gap expansion), candle (direction, body %, range), quality (ADX, ATR, ATR%, chasing distance), full score breakdown, and position (Entry/SL/TP1/TP2/Risk/RiskATR/R:R). All values are the existing engine variables — nothing is recalculated.
+- **Gate-status table:** `— GATE STATUS —` shows PASS/FAIL/N/A for every gate of the latest candidate, plus the score and the decision.
+- **Decision statistics:** `— DIAGNOSTIC STATS —` counts candidates, signals, rejections, and per-reason rejection buckets — answering *which filter kills the most setups* (observation only; filters are NOT changed based on it).
 - **Outcome tracking:** accepted signals are frozen (time, direction, Entry, SL, TP1, TP2, Risk) and followed across the next `Outcome tracking bars` **confirmed entry-TF candles after the signal bar**. MFE/MAE are computed in R from the signal's own Risk. Outcome is classified `SL FIRST` / `TP1 FIRST` / `TP2 FIRST` / `AMBIGUOUS` (SL and a TP touched inside the same candle — order unknowable from OHLC) / `EXPIRED` / `SUPERSEDED`. These values use only candles **after** the signal and never feed back into the signal decision.
-- **Pine persistence limitation:** Pine cannot write files, so the log is bounded in-script arrays (25/50/100 events) shown in tables, plus optional `CVLOG` alerts for external copy-paste. On reload the history replays deterministically from the same confirmed data.
+- **Historical behavior:** the logger runs on historical candles too — scrolling back shows the same decisions; reload replays them deterministically from the same confirmed data. History is bounded (`Diagnostic history size`, default 20).
+- **Pine persistence limitation:** Pine cannot write files, so the log is bounded in-script arrays shown in tables, plus optional `CVLOG` alerts for external copy-paste.
 - **Not a backtest:** no `strategy()`, no orders, no position sizing, no account simulation, no profitability claims.
 
 ## 13. MT5 differences (Phase 2 v2.00)

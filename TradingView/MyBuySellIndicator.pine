@@ -11,6 +11,7 @@
 //|  v2.5.0 - Phase 1 (v3): quality gates                             |
 //|  v3.1.0 - Phase 2: structural SL + risk validation + R-based TP   |
 //|  v3.2.0 - Signal Diagnostic Mode: event logger + outcome tracker   |
+//|  v3.3.0 - Signal Decision Logger: first-failure chain + statistics |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -43,7 +44,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v3.2.0"
+VERSION = "v3.3.0"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -111,13 +112,13 @@ showMarkers  = input.bool(true, "Show BUY/SELL markers", group = grpVis)
 showLevels   = input.bool(true, "Show Entry/SL/TP1/TP2 lines", group = grpVis)
 showSigLabels = input.bool(true, "Show signal labels",          group = grpVis)
 auditMode     = input.bool(false, "Signal Audit Mode (debug)",  group = grpVis)
+decisionLogger = input.bool(false, "Signal Decision Logger",      group = grpVis)
 
 showPanel = input.bool(true, "Show info panel", group = grpPanel)
 
 enableAlerts = input.bool(false, "EnableAlerts", group = grpAlerts)
 
-diagMode         = input.bool(false, "Signal Diagnostic Mode", group = grpDiag)
-diagHistorySize  = input.int(50,     "Diagnostic history size", minval = 1, maxval = 100, group = grpDiag)
+diagHistorySize  = input.int(20,     "Diagnostic history size", minval = 1, maxval = 100, group = grpDiag)
 outcomeBars      = input.int(20,     "Outcome tracking bars", minval = 1, maxval = 100, group = grpDiag)
 enableDiagAlerts = input.bool(false, "Enable diagnostic CVLOG alerts", group = grpDiag)
 
@@ -837,9 +838,9 @@ if isCandidateDn
     rejectTxt := not regimeDnOk ? "4H REGIME" : not h1ConfDn ? "1H CONFIRMATION" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? "ENTRY STRUCTURE" : not candleDnOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : sellScore < minScore ? "SCORE TOO LOW" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
 
 //==============================================================
-// SIGNAL DIAGNOSTIC SYSTEM (v3.2.0) - observational only
-//  Diagnostic Mode OFF : zero activity; chart and engine are
-//    byte-identical to v3.1.0. No labels, no tables, no alerts.
+// SIGNAL DECISION LOGGER (v3.3.0) - observational only
+//  Signal Decision Logger OFF : zero activity; chart and engine are
+//    byte-identical to v3.2.0. No labels, no tables, no alerts.
 //  Diagnostic Mode ON  : every confirmed candidate evaluation on
 //    a supported timeframe (15m/1H/4H) is logged with the EXACT
 //    values the engine used; the first failed gate is recorded;
@@ -903,6 +904,21 @@ var float  devRisk     = na
 var float  devRiskAtr  = na
 var float  devRR1      = na
 var float  devRR2      = na
+var string devDecision = ""
+var bool   devGateSlope = false
+var bool   devGateSep   = false
+var bool   devGateH1Struct = false
+var bool   devGateH1Mom = false
+var bool   devGateEntryStruct = false
+var bool   devGateEntryPos = false
+var bool   devGateEmaExp = false
+var bool   devGateTrigger = false
+var bool   devGateCandle = false
+var bool   devGateAdx   = false
+var bool   devGateVol   = false
+var bool   devGateChase = false
+var bool   devGateRisk  = false
+var bool   devGateScore = false
 
 //--- Active-signal outcome tracking (one at a time; observational)
 var bool   trActive  = false
@@ -924,13 +940,33 @@ var bool   trTp2Hit  = false
 var string trOutcome = ""
 var array<string> outLog = array.new_string()
 
+//--- Decision statistics (counted from logged candidates)
+var int stCand = 0
+var int stSig = 0
+var int stRej = 0
+var int st4hRegime = 0
+var int st4hSlope = 0
+var int st4hSep = 0
+var int st1hStruct = 0
+var int st1hMom = 0
+var int stEntryStruct = 0
+var int stEntryPos = 0
+var int stEmaExp = 0
+var int stCandle = 0
+var int stAdx = 0
+var int stVol = 0
+var int stChase = 0
+var int stOpt = 0
+var int stRisk = 0
+var int stScore = 0
+
 //--- Granular first-failed-gate reason, derived ONLY from the
 //--- existing gate booleans (observation, not a reimplementation)
-diagReasonUp = not regimeUpOk ? (not h4Bull ? "4H REGIME" : not slopeUp ? "4H SLOPE" : "4H SEPARATION") : not h1ConfUp ? "1H STRUCTURE" : not h1MomUp ? "1H MOMENTUM" : not setupGateUp ? (not setupUp ? "ENTRY STRUCTURE" : "GAP EXPANSION") : not candleUpOk ? (close <= open ? "CANDLE DIRECTION" : "CANDLE BODY") : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not buyGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : buyScore < minScore ? "SCORE" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
-diagReasonDn = not regimeDnOk ? (not h4Bear ? "4H REGIME" : not slopeDn ? "4H SLOPE" : "4H SEPARATION") : not h1ConfDn ? "1H STRUCTURE" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? (not setupDn ? "ENTRY STRUCTURE" : "GAP EXPANSION") : not candleDnOk ? (close >= open ? "CANDLE DIRECTION" : "CANDLE BODY") : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : sellScore < minScore ? "SCORE" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
+diagReasonUp = not regimeUpOk ? (not h4Bull ? "4H REGIME" : not slopeUp ? "4H SLOPE" : "4H SEPARATION") : not h1ConfUp ? "1H STRUCTURE" : not h1MomUp ? "1H MOMENTUM" : not setupGateUp ? (not (emaF > emaS) ? "ENTRY STRUCTURE" : not (close >= emaF) ? "ENTRY POSITION" : "EMA EXPANSION") : not crossUp ? "NO TRIGGER" : not candleUpOk ? (close <= open ? "CANDLE DIRECTION" : "CANDLE BODY") : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not buyGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : buyScore < minScore ? "SCORE" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
+diagReasonDn = not regimeDnOk ? (not h4Bear ? "4H REGIME" : not slopeDn ? "4H SLOPE" : "4H SEPARATION") : not h1ConfDn ? "1H STRUCTURE" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? (not (emaF < emaS) ? "ENTRY STRUCTURE" : not (close <= emaF) ? "ENTRY POSITION" : "EMA EXPANSION") : not crossDn ? "NO TRIGGER" : not candleDnOk ? (close >= open ? "CANDLE DIRECTION" : "CANDLE BODY") : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : not atrUsable ? "ATR INVALID" : sellScore < minScore ? "SCORE" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO LARGE" : "INVALID STRUCTURE") : ""
 
 //--- Capture BUY candidate events (confirmed, supported TF only)
-if diagMode and isCandidateUp
+if decisionLogger and isCandidateUp
     devTime     := time
     devTf       := timeframe.period
     devDir      := "BUY"
@@ -971,6 +1007,21 @@ if diagMode and isCandidateUp
     devRiskAtr  := riskAtrBuy
     devRR1      := rrTp1Buy
     devRR2      := rrTp2Buy
+    devDecision := buySig ? devSigType : "REJECTED"
+    devGateSlope := slopeUp
+    devGateSep   := sep4HOk
+    devGateH1Struct := h1ConfUp
+    devGateH1Mom := h1MomUp
+    devGateEntryStruct := emaF > emaS
+    devGateEntryPos := close >= emaF
+    devGateEmaExp := gapUpExp
+    devGateTrigger := crossUp
+    devGateCandle := candleUpOk
+    devGateAdx   := adxGateOk
+    devGateVol   := volFloorOk
+    devGateChase := chaseGateOk
+    devGateRisk  := riskGateBuyOk
+    devGateScore := buyScore >= minScore
 
     //--- Buffer push (bounded by the Diagnostic history size input)
     array.push(evTime,   time)
@@ -994,6 +1045,43 @@ if diagMode and isCandidateUp
         array.remove(evRiskA, 0)
         array.remove(evRR1, 0)
         array.remove(evRR2, 0)
+
+    //--- Decision statistics (reason buckets from the existing chain)
+    stCand := stCand + 1
+    if buySig
+        stSig := stSig + 1
+    else
+        stRej := stRej + 1
+        if diagReasonUp == "4H REGIME"
+            st4hRegime := st4hRegime + 1
+        else if diagReasonUp == "4H SLOPE"
+            st4hSlope := st4hSlope + 1
+        else if diagReasonUp == "4H SEPARATION"
+            st4hSep := st4hSep + 1
+        else if diagReasonUp == "1H STRUCTURE"
+            st1hStruct := st1hStruct + 1
+        else if diagReasonUp == "1H MOMENTUM"
+            st1hMom := st1hMom + 1
+        else if diagReasonUp == "ENTRY STRUCTURE"
+            stEntryStruct := stEntryStruct + 1
+        else if diagReasonUp == "ENTRY POSITION"
+            stEntryPos := stEntryPos + 1
+        else if diagReasonUp == "EMA EXPANSION"
+            stEmaExp := stEmaExp + 1
+        else if diagReasonUp == "CANDLE DIRECTION" or diagReasonUp == "CANDLE BODY"
+            stCandle := stCandle + 1
+        else if diagReasonUp == "ADX"
+            stAdx := stAdx + 1
+        else if diagReasonUp == "VOLATILITY"
+            stVol := stVol + 1
+        else if diagReasonUp == "CHASING"
+            stChase := stChase + 1
+        else if diagReasonUp == "OPTIONAL FILTERS"
+            stOpt := stOpt + 1
+        else if diagReasonUp == "RISK TOO LARGE" or diagReasonUp == "INVALID STRUCTURE" or diagReasonUp == "ATR INVALID"
+            stRisk := stRisk + 1
+        else if diagReasonUp == "SCORE"
+            stScore := stScore + 1
 
     //--- A newer signal finalizes an older still-unresolved one
     if buySig and trActive
@@ -1026,7 +1114,7 @@ if diagMode and isCandidateUp
         alert("CVLOG|" + syminfo.ticker + "|" + timeframe.period + "|BUY|" + devResult + "|" + str.tostring(buyScore) + "|" + (devReason == "" ? "OK" : devReason) + "|ADX=" + str.tostring(adxVal, "#.##") + "|ATR=" + str.tostring(atrVal, "#.##") + "|RISK=" + str.tostring(riskAtrBuy, "#.##") + "A|RR=" + str.tostring(rrTp1Buy, "#.##") + "/" + str.tostring(rrTp2Buy, "#.##") + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slBuy, format.mintick) + "|TP1=" + str.tostring(tp1Buy, format.mintick) + "|TP2=" + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
 
 //--- Capture SELL candidate events (mirrored)
-if diagMode and isCandidateDn
+if decisionLogger and isCandidateDn
     devTime     := time
     devTf       := timeframe.period
     devDir      := "SELL"
@@ -1067,6 +1155,21 @@ if diagMode and isCandidateDn
     devRiskAtr  := riskAtrSell
     devRR1      := rrTp1Sell
     devRR2      := rrTp2Sell
+    devDecision := sellSig ? devSigType : "REJECTED"
+    devGateSlope := slopeDn
+    devGateSep   := sep4HOk
+    devGateH1Struct := h1ConfDn
+    devGateH1Mom := h1MomDn
+    devGateEntryStruct := emaF < emaS
+    devGateEntryPos := close <= emaF
+    devGateEmaExp := gapDnExp
+    devGateTrigger := crossDn
+    devGateCandle := candleDnOk
+    devGateAdx   := adxGateOk
+    devGateVol   := volFloorOk
+    devGateChase := chaseGateOk
+    devGateRisk  := riskGateSellOk
+    devGateScore := sellScore >= minScore
 
     //--- Buffer push (bounded)
     array.push(evTime,   time)
@@ -1090,6 +1193,43 @@ if diagMode and isCandidateDn
         array.remove(evRiskA, 0)
         array.remove(evRR1, 0)
         array.remove(evRR2, 0)
+
+    //--- Decision statistics (reason buckets from the existing chain)
+    stCand := stCand + 1
+    if sellSig
+        stSig := stSig + 1
+    else
+        stRej := stRej + 1
+        if diagReasonDn == "4H REGIME"
+            st4hRegime := st4hRegime + 1
+        else if diagReasonDn == "4H SLOPE"
+            st4hSlope := st4hSlope + 1
+        else if diagReasonDn == "4H SEPARATION"
+            st4hSep := st4hSep + 1
+        else if diagReasonDn == "1H STRUCTURE"
+            st1hStruct := st1hStruct + 1
+        else if diagReasonDn == "1H MOMENTUM"
+            st1hMom := st1hMom + 1
+        else if diagReasonDn == "ENTRY STRUCTURE"
+            stEntryStruct := stEntryStruct + 1
+        else if diagReasonDn == "ENTRY POSITION"
+            stEntryPos := stEntryPos + 1
+        else if diagReasonDn == "EMA EXPANSION"
+            stEmaExp := stEmaExp + 1
+        else if diagReasonDn == "CANDLE DIRECTION" or diagReasonDn == "CANDLE BODY"
+            stCandle := stCandle + 1
+        else if diagReasonDn == "ADX"
+            stAdx := stAdx + 1
+        else if diagReasonDn == "VOLATILITY"
+            stVol := stVol + 1
+        else if diagReasonDn == "CHASING"
+            stChase := stChase + 1
+        else if diagReasonDn == "OPTIONAL FILTERS"
+            stOpt := stOpt + 1
+        else if diagReasonDn == "RISK TOO LARGE" or diagReasonDn == "INVALID STRUCTURE" or diagReasonDn == "ATR INVALID"
+            stRisk := stRisk + 1
+        else if diagReasonDn == "SCORE"
+            stScore := stScore + 1
 
     //--- A newer signal finalizes an older still-unresolved one
     if sellSig and trActive
@@ -1124,7 +1264,7 @@ if diagMode and isCandidateDn
 //--- Post-signal outcome tracking (confirmed bars AFTER the signal
 //--- bar only; MFE/MAE in R; TP/SL hits; outcome classification).
 //--- Observational - these values never feed back into the engine.
-if diagMode and trActive and isConfirmed and bar_index > trBar
+if decisionLogger and trActive and isConfirmed and bar_index > trBar
     trElapsed := trElapsed + 1
     favR = trDir == "BUY" ? (high - trEntry) / math.max(trRisk, 1e-10) : (trEntry - low) / math.max(trRisk, 1e-10)
     advR = trDir == "BUY" ? (trEntry - low) / math.max(trRisk, 1e-10) : (high - trEntry) / math.max(trRisk, 1e-10)
@@ -1272,10 +1412,12 @@ if not auditMode
 //==============================================================
 var table diagTbl    = na
 var table diagDetTbl = na
+var table gateTbl    = na
+var table statsTbl   = na
 var int   diagRows   = 0
 var int   evRendered = -1
 
-if diagMode
+if decisionLogger
     if na(diagTbl) or diagRows != diagHistorySize
         if not na(diagTbl)
             table.delete(diagTbl)
@@ -1284,7 +1426,7 @@ if diagMode
         evRendered := -1
     if evRendered != array.size(evTime)
         evRendered := array.size(evTime)
-        table.cell(diagTbl, 0, 0, "CANVASV DIAGNOSTICS (" + str.tostring(array.size(evTime)) + ")", text_color = color.white, text_size = size.small)
+        table.cell(diagTbl, 0, 0, "RECENT DECISIONS (" + str.tostring(array.size(evTime)) + ")", text_color = color.white, text_size = size.small)
         for i = 0 to diagHistorySize - 1
             if i < array.size(evTime)
                 rowTxt = str.tostring(array.get(evTime, i), "MM-dd HH:mm") + " " + array.get(evTf, i) + " " + array.get(evDir, i) + " " + array.get(evResult, i) + (array.get(evResult, i) == "SIGNAL" ? " " + str.tostring(array.get(evScore, i)) + " · E " + str.tostring(array.get(evEntry, i), format.mintick) + " · R " + str.tostring(array.get(evRiskA, i), "#.##") + "A · RR " + str.tostring(array.get(evRR1, i), "#.##") + "/" + str.tostring(array.get(evRR2, i), "#.##") : " · " + array.get(evReason, i))
@@ -1293,7 +1435,7 @@ if diagMode
                 table.cell(diagTbl, 0, i + 1, "", text_color = color.silver, text_size = size.small)
 
     if na(diagDetTbl)
-        diagDetTbl := table.new(position.top_right, 2, 16, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        diagDetTbl := table.new(position.top_right, 2, 17, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Latest-event detail (built from the frozen snapshots)
     hasEv = not na(devTime)
@@ -1312,38 +1454,136 @@ if diagMode
     hitsTxt    = (trActive or not na(trFinalR)) ? (trTp1Hit ? "TP1 HIT" : "TP1 NOT HIT") + " · " + (trTp2Hit ? "TP2 HIT" : "TP2 NOT HIT") + " · " + (trSlHit ? "SL HIT" : "SL NOT HIT") : "—"
     lastOutTxt = array.size(outLog) > 0 ? array.get(outLog, array.size(outLog) - 1) : "—"
 
-    table.cell(diagDetTbl, 0, 0, "— LAST DIAGNOSTIC —", text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 0, "— DECISION LOG —", text_color = color.white, text_size = size.small)
     table.cell(diagDetTbl, 1, 0, "", text_color = color.white, text_size = size.small)
     table.cell(diagDetTbl, 0, 1, "EVENT", text_color = color.silver, text_size = size.small)
     table.cell(diagDetTbl, 1, 1, evHeadTxt, text_color = devResult == "SIGNAL" ? color.lime : color.white, text_size = size.small)
-    table.cell(diagDetTbl, 0, 2, "REASON", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 2, hasEv ? (devReason == "" ? "—" : devReason) : "—", text_color = color.red, text_size = size.small)
-    table.cell(diagDetTbl, 0, 3, "4H", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 3, h4Txt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 4, "EMA50/200", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 4, e50Txt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 5, "1H", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 5, h1Txt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 6, "ENTRY", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 6, entryTxt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 7, "CANDLE", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 7, candleTxt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 8, "EMA9/21", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 8, emaTxt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 9, "QUALITY", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 9, qualTxt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 10, "SCORE", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 10, scoreTxt, text_color = color.white, text_size = size.small)
-    table.cell(diagDetTbl, 0, 11, "POSITION", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 11, posTxt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 12, "RISK/RR", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 12, rrTxt, text_color = color.white, text_size = size.small)
-    table.cell(diagDetTbl, 0, 13, "TRACK", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 13, trackTxt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 14, "HITS", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 14, hitsTxt, text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 0, 15, "OUTCOME", text_color = color.silver, text_size = size.small)
-    table.cell(diagDetTbl, 1, 15, trActive ? "TRACKING…" : lastOutTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 2, "DECISION", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 2, hasEv ? devDecision : "—", text_color = hasEv ? (devDecision == "REJECTED" ? color.red : color.lime) : color.silver, text_size = size.normal)
+    table.cell(diagDetTbl, 0, 3, "REASON", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 3, hasEv ? (devReason == "" ? "—" : devReason) : "—", text_color = color.red, text_size = size.small)
+    table.cell(diagDetTbl, 0, 4, "4H", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 4, h4Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 5, "EMA50/200", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 5, e50Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 6, "1H", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 6, h1Txt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 7, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 7, entryTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 8, "CANDLE", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 8, candleTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 9, "EMA9/21", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 9, emaTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 10, "QUALITY", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 10, qualTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 11, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 11, scoreTxt, text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 12, "POSITION", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 12, posTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 13, "RISK/RR", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 13, rrTxt, text_color = color.white, text_size = size.small)
+    table.cell(diagDetTbl, 0, 14, "TRACK", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 14, trackTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 15, "HITS", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 15, hitsTxt, text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 0, 16, "OUTCOME", text_color = color.silver, text_size = size.small)
+    table.cell(diagDetTbl, 1, 16, trActive ? "TRACKING…" : lastOutTxt, text_color = color.silver, text_size = size.small)
+
+    //--- Gate status table (latest candidate's first-failure chain)
+    if na(gateTbl)
+        gateTbl := table.new(position.top_right, 2, 17, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+    gsRegime   = hasEv ? (devRegimeOk         ? "PASS" : "FAIL") : "N/A"
+    gsSlope    = hasEv ? (devGateSlope        ? "PASS" : "FAIL") : "N/A"
+    gsSep      = hasEv ? (devGateSep          ? "PASS" : "FAIL") : "N/A"
+    gsH1Struct = hasEv ? (devGateH1Struct     ? "PASS" : "FAIL") : "N/A"
+    gsH1Mom    = hasEv ? (devGateH1Mom        ? "PASS" : "FAIL") : "N/A"
+    gsEntrySt  = hasEv ? (devGateEntryStruct  ? "PASS" : "FAIL") : "N/A"
+    gsEntryPos = hasEv ? (devGateEntryPos     ? "PASS" : "FAIL") : "N/A"
+    gsEmaExp   = hasEv ? (devGateEmaExp       ? "PASS" : "FAIL") : "N/A"
+    gsTrigger  = hasEv ? (devGateTrigger      ? "PASS" : "FAIL") : "N/A"
+    gsCandle   = hasEv ? (devGateCandle       ? "PASS" : "FAIL") : "N/A"
+    gsAdx      = hasEv ? (devGateAdx          ? "PASS" : "FAIL") : "N/A"
+    gsVol      = hasEv ? (devGateVol          ? "PASS" : "FAIL") : "N/A"
+    gsChase    = hasEv ? (devGateChase        ? "PASS" : "FAIL") : "N/A"
+    gsRisk     = hasEv ? (devGateRisk         ? "PASS" : "FAIL") : "N/A"
+    gsScore    = hasEv ? str.tostring(devScore) + "/" + str.tostring(devMax) : "N/A"
+
+    table.cell(gateTbl, 0, 0, "— GATE STATUS —", text_color = color.white, text_size = size.small)
+    table.cell(gateTbl, 1, 0, "", text_color = color.white, text_size = size.small)
+    table.cell(gateTbl, 0, 1, "4H REGIME", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 1, gsRegime, text_color = gsRegime == "PASS" ? color.lime : gsRegime == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 2, "4H SLOPE", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 2, gsSlope, text_color = gsSlope == "PASS" ? color.lime : gsSlope == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 3, "4H SEPARATION", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 3, gsSep, text_color = gsSep == "PASS" ? color.lime : gsSep == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 4, "1H STRUCTURE", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 4, gsH1Struct, text_color = gsH1Struct == "PASS" ? color.lime : gsH1Struct == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 5, "1H MOMENTUM", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 5, gsH1Mom, text_color = gsH1Mom == "PASS" ? color.lime : gsH1Mom == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 6, "ENTRY STRUCTURE", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 6, gsEntrySt, text_color = gsEntrySt == "PASS" ? color.lime : gsEntrySt == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 7, "ENTRY POSITION", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 7, gsEntryPos, text_color = gsEntryPos == "PASS" ? color.lime : gsEntryPos == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 8, "EMA EXPANSION", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 8, gsEmaExp, text_color = gsEmaExp == "PASS" ? color.lime : gsEmaExp == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 9, "TRIGGER", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 9, gsTrigger, text_color = gsTrigger == "PASS" ? color.lime : gsTrigger == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 10, "CANDLE", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 10, gsCandle, text_color = gsCandle == "PASS" ? color.lime : gsCandle == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 11, "ADX", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 11, gsAdx, text_color = gsAdx == "PASS" ? color.lime : gsAdx == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 12, "VOLATILITY", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 12, gsVol, text_color = gsVol == "PASS" ? color.lime : gsVol == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 13, "CHASING", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 13, gsChase, text_color = gsChase == "PASS" ? color.lime : gsChase == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 14, "RISK", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 14, gsRisk, text_color = gsRisk == "PASS" ? color.lime : gsRisk == "FAIL" ? color.red : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 15, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 15, gsScore, text_color = hasEv ? (devGateScore ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(gateTbl, 0, 16, "DECISION", text_color = color.silver, text_size = size.small)
+    table.cell(gateTbl, 1, 16, hasEv ? devDecision : "N/A", text_color = hasEv ? (devDecision == "REJECTED" ? color.red : color.lime) : color.silver, text_size = size.small)
+
+    //--- Decision statistics (which filter kills the most setups)
+    if na(statsTbl)
+        statsTbl := table.new(position.top_right, 2, 19, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+    table.cell(statsTbl, 0, 0, "— DIAGNOSTIC STATS —", text_color = color.white, text_size = size.small)
+    table.cell(statsTbl, 1, 0, "", text_color = color.white, text_size = size.small)
+    table.cell(statsTbl, 0, 1, "CANDIDATES", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 1, str.tostring(stCand), text_color = color.white, text_size = size.small)
+    table.cell(statsTbl, 0, 2, "SIGNALS", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 2, str.tostring(stSig), text_color = color.lime, text_size = size.small)
+    table.cell(statsTbl, 0, 3, "REJECTED", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 3, str.tostring(stRej), text_color = color.red, text_size = size.small)
+    table.cell(statsTbl, 0, 4, "4H REGIME", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 4, st4hRegime > 0 ? str.tostring(st4hRegime) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 5, "4H SLOPE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 5, st4hSlope > 0 ? str.tostring(st4hSlope) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 6, "4H SEPARATION", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 6, st4hSep > 0 ? str.tostring(st4hSep) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 7, "1H STRUCTURE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 7, st1hStruct > 0 ? str.tostring(st1hStruct) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 8, "1H MOMENTUM", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 8, st1hMom > 0 ? str.tostring(st1hMom) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 9, "ENTRY STRUCTURE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 9, stEntryStruct > 0 ? str.tostring(stEntryStruct) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 10, "ENTRY POSITION", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 10, stEntryPos > 0 ? str.tostring(stEntryPos) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 11, "EMA EXPANSION", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 11, stEmaExp > 0 ? str.tostring(stEmaExp) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 12, "CANDLE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 12, stCandle > 0 ? str.tostring(stCandle) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 13, "ADX", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 13, stAdx > 0 ? str.tostring(stAdx) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 14, "VOLATILITY", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 14, stVol > 0 ? str.tostring(stVol) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 15, "CHASING", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 15, stChase > 0 ? str.tostring(stChase) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 16, "RISK", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 16, stRisk > 0 ? str.tostring(stRisk) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 17, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 17, stScore > 0 ? str.tostring(stScore) : "—", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 0, 18, "OPTIONAL FILTERS", text_color = color.silver, text_size = size.small)
+    table.cell(statsTbl, 1, 18, stOpt > 0 ? str.tostring(stOpt) : "—", text_color = color.silver, text_size = size.small)
 else
     if not na(diagTbl)
         table.delete(diagTbl)
@@ -1351,3 +1591,9 @@ else
     if not na(diagDetTbl)
         table.delete(diagDetTbl)
         diagDetTbl := na
+    if not na(gateTbl)
+        table.delete(gateTbl)
+        gateTbl := na
+    if not na(statsTbl)
+        table.delete(statsTbl)
+        statsTbl := na

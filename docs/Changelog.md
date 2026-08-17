@@ -2,7 +2,17 @@
 
 All notable changes to CanvasV MTF Signal.
 
-## Build compatibility fix (after v3.2.0)
+## v3.3.0 — Signal Decision Logger: first-failure chain, gate status, statistics
+
+Date: 2026-08-17
+
+- **Renamed the master diagnostic toggle to `Signal Decision Logger`** (Visuals group, default **off**; previously `Signal Diagnostic Mode`). When off, the script is byte-identical to v3.2.0 except the version string and the new input — no labels, no tables, no alerts.
+- **First-failure decision chain.** Rejected candidates now identify the first failing condition in the engine's exact order: `4H REGIME` → `4H SLOPE` → `4H SEPARATION` → `1H STRUCTURE` → `1H MOMENTUM` → `ENTRY STRUCTURE` → `ENTRY POSITION` → `EMA EXPANSION` → `NO TRIGGER` → `CANDLE DIRECTION` → `CANDLE BODY` → `ADX` → `VOLATILITY` → `CHASING` → `OPTIONAL FILTERS` → `ATR INVALID` → `SCORE` → `RISK TOO LARGE` / `INVALID STRUCTURE`. The entry-setup gate is now split into **ENTRY STRUCTURE** (EMA9 vs EMA21) and **ENTRY POSITION** (close vs EMA9), and the old `GAP EXPANSION` label is now **EMA EXPANSION**. Derived only from the existing gate booleans — no new conditions. The chain distinguishes **rejected before scoring** from **all gates passed but score insufficient** (`SCORE`) from **signal fired** (`DECISION = BUY/SELL`).
+- **`— DECISION LOG —` detail section** (renamed from `— LAST DIAGNOSTIC —`): adds a large `DECISION` row (`BUY`/`STRONG BUY`/`SELL`/`STRONG SELL`/`REJECTED`, green/red) alongside the existing EVENT / REASON / 4H / EMA50-200 / 1H / ENTRY / CANDLE / EMA9-21 / QUALITY / SCORE / POSITION / RISK-RR / TRACK / HITS / OUTCOME rows.
+- **`— GATE STATUS —` table:** PASS / FAIL / N/A per gate (4H REGIME, 4H SLOPE, 4H SEPARATION, 1H STRUCTURE, 1H MOMENTUM, ENTRY STRUCTURE, ENTRY POSITION, EMA EXPANSION, TRIGGER, CANDLE, ADX, VOLATILITY, CHASING, RISK, SCORE) + DECISION row, from frozen per-gate snapshot booleans.
+- **`— DIAGNOSTIC STATS —` table:** CANDIDATES / SIGNALS / REJECTED plus per-reason rejection counts (4H REGIME, 4H SLOPE, 4H SEPARATION, 1H STRUCTURE, 1H MOMENTUM, ENTRY STRUCTURE, ENTRY POSITION, EMA EXPANSION, CANDLE, ADX, VOLATILITY, CHASING, RISK, SCORE, OPTIONAL FILTERS) — answers *which filter kills the most setups*. Observation only; no filter changes.
+- **Default `Diagnostic history size` changed 50 → 20** (bounded event log, newest kept; matches the compact `RECENT DECISIONS` summary header rename).
+- **Unchanged (byte-verified vs v3.2.0):** `buySig`/`sellSig`, score formulas and thresholds, every Phase 1 gate, the Phase 2 position engine (structural SL, risk gate, R-based TPs), TF policy, trading alerts, `alertcondition`s, HTF methodology, repaint protection, and all Pine build-compatibility constraints (including the `ta.lowest`/`ta.highest` fix). MT5 code untouched. Still **not a backtest** — no `strategy()`, no orders, no P&L, no profitability claim.
 
 - The target Pine build does not provide the bare `lowest()` / `highest()` functions (`Could not find function or function reference 'lowest'`). The Phase 2 structural-SL swing is now computed with the namespaced `ta.lowest(low, swingLookback)[1]` / `ta.highest(high, swingLookback)[1]` — identical values, zero logic change (same pattern as the earlier `abs()` → `math.abs()` fix).
 
