@@ -693,62 +693,66 @@ if auditMode
     //--- Reason (unsupported timeframes only)
     table.cell(aud, 0, 3, "REASON", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 3, isSupportedSignalTF ? "" : tfReasonTxt, text_color = color.red, text_size = size.small)
-    //--- Detail rows (supported signal timeframes only)
-    if isSupportedSignalTF
-        //--- Signal + score
-        table.cell(aud, 0, 4, "SIGNAL", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 4, audDirTxt, text_color = audSigCol,   text_size = size.normal)
-        table.cell(aud, 0, 5, "SCORE", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 5, audScoreTxt, text_color = color.silver, text_size = size.normal)
-        //--- 4H trend
-        table.cell(aud, 0, 6, "4H TREND", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 6, audTrendTxt, text_color = audHas ? (audTrendOk ? color.lime : color.red) : color.silver, text_size = size.small)
-        table.cell(aud, 0, 7, "EMA50 / EMA200", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 7, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma200) ? "--" : str.tostring(audEma200, format.mintick)), text_color = color.silver, text_size = size.small)
-        //--- 4H slope
-        table.cell(aud, 0, 8, "4H SLOPE", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 8, audSlopeTxt + (audHas ? "  (" + slopeDirTxt + ")" : ""), text_color = audHas ? (audSlopeOk ? color.lime : color.red) : color.silver, text_size = size.small)
-        table.cell(aud, 0, 9, "EMA50 cur/prev", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 9, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma50Prev) ? "--" : str.tostring(audEma50Prev, format.mintick)), text_color = color.silver, text_size = size.small)
-        //--- 1H confirmation
-        table.cell(aud, 0, 10, "1H CONF", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 10, audH1Txt, text_color = audHas ? (audH1Ok ? color.lime : color.red) : color.silver, text_size = size.small)
-        table.cell(aud, 0, 11, "1H EMA fast/slow", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 11, (na(audH1Fast) ? "--" : str.tostring(audH1Fast, format.mintick)) + " / " + (na(audH1Slow) ? "--" : str.tostring(audH1Slow, format.mintick)), text_color = color.silver, text_size = size.small)
-        //--- Entry trigger (on the chart TF)
-        table.cell(aud, 0, 12, entryTfTxt, text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 12, audCrossTxt, text_color = audHas ? (audCrossOk ? color.lime : color.red) : color.silver, text_size = size.small)
-        table.cell(aud, 0, 13, "EMA9 / EMA21", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 13, (na(audEmaF) ? "--" : str.tostring(audEmaF, format.mintick)) + " / " + (na(audEmaS) ? "--" : str.tostring(audEmaS, format.mintick)), text_color = color.silver, text_size = size.small)
-        //--- ADX
-        table.cell(aud, 0, 14, "ADX", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 14, audAdxTxt, text_color = audHas ? (audAdxOk ? color.lime : color.red) : color.silver, text_size = size.small)
-        table.cell(aud, 0, 15, "ADX val / min", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 15, (na(audAdx) ? "--" : str.tostring(audAdx, "#.##")) + " / " + (na(audAdxMin) ? "--" : str.tostring(audAdxMin, "#.##")), text_color = color.silver, text_size = size.small)
-        //--- Volatility / volume (rows show a contribution only when the weight is enabled)
-        table.cell(aud, 0, 16, "VOLATILITY", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 16, atrVolWeight > 0 ? audVolTxt : "", text_color = audHas ? (audVolOk ? color.lime : color.red) : color.silver, text_size = size.small)
-        table.cell(aud, 0, 17, "VOLUME", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 17, volWeight > 0 ? audVolConfTxt : "", text_color = audHas ? (audVolConfOk ? color.lime : color.red) : color.silver, text_size = size.small)
-        //--- Total (exact existing score)
-        table.cell(aud, 0, 18, "TOTAL", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 18, audScoreTxt, text_color = color.white, text_size = size.normal)
-        //--- Price levels (exact existing ATR levels)
-        table.cell(aud, 0, 19, "ENTRY", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 19, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
-        table.cell(aud, 0, 20, "SL", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 20, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
-        table.cell(aud, 0, 21, "TP1", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 21, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
-        table.cell(aud, 0, 22, "TP2", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 22, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
-        //--- Signal bar
-        table.cell(aud, 0, 23, "BAR", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 23, syminfo.ticker + " " + timeframe.period + "  " + (na(audBarTime) ? "--" : str.tostring(audBarTime, format.timestamp)), text_color = color.silver, text_size = size.small)
-        table.cell(aud, 0, 24, "CONFIRMED", text_color = color.silver, text_size = size.small)
-        table.cell(aud, 1, 24, audConfirmedTxt, text_color = isSupportedSignalTF ? color.lime : color.red, text_size = size.small)
-    end
-else
+
+//--- Detail rows (supported signal timeframes only). Separate top-level
+//--- if: the target Pine build does not support the 'end' keyword, so
+//--- blocks are delimited purely by indentation/dedent.
+if auditMode and isSupportedSignalTF
+    //--- Signal + score
+    table.cell(aud, 0, 4, "SIGNAL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 4, audDirTxt, text_color = audSigCol,   text_size = size.normal)
+    table.cell(aud, 0, 5, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 5, audScoreTxt, text_color = color.silver, text_size = size.normal)
+    //--- 4H trend
+    table.cell(aud, 0, 6, "4H TREND", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 6, audTrendTxt, text_color = audHas ? (audTrendOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 7, "EMA50 / EMA200", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 7, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma200) ? "--" : str.tostring(audEma200, format.mintick)), text_color = color.silver, text_size = size.small)
+    //--- 4H slope
+    table.cell(aud, 0, 8, "4H SLOPE", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 8, audSlopeTxt + (audHas ? "  (" + slopeDirTxt + ")" : ""), text_color = audHas ? (audSlopeOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 9, "EMA50 cur/prev", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 9, (na(audEma50) ? "--" : str.tostring(audEma50, format.mintick)) + " / " + (na(audEma50Prev) ? "--" : str.tostring(audEma50Prev, format.mintick)), text_color = color.silver, text_size = size.small)
+    //--- 1H confirmation
+    table.cell(aud, 0, 10, "1H CONF", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 10, audH1Txt, text_color = audHas ? (audH1Ok ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 11, "1H EMA fast/slow", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 11, (na(audH1Fast) ? "--" : str.tostring(audH1Fast, format.mintick)) + " / " + (na(audH1Slow) ? "--" : str.tostring(audH1Slow, format.mintick)), text_color = color.silver, text_size = size.small)
+    //--- Entry trigger (on the chart TF)
+    table.cell(aud, 0, 12, entryTfTxt, text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 12, audCrossTxt, text_color = audHas ? (audCrossOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 13, "EMA9 / EMA21", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 13, (na(audEmaF) ? "--" : str.tostring(audEmaF, format.mintick)) + " / " + (na(audEmaS) ? "--" : str.tostring(audEmaS, format.mintick)), text_color = color.silver, text_size = size.small)
+    //--- ADX
+    table.cell(aud, 0, 14, "ADX", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 14, audAdxTxt, text_color = audHas ? (audAdxOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 15, "ADX val / min", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 15, (na(audAdx) ? "--" : str.tostring(audAdx, "#.##")) + " / " + (na(audAdxMin) ? "--" : str.tostring(audAdxMin, "#.##")), text_color = color.silver, text_size = size.small)
+    //--- Volatility / volume (rows show a contribution only when the weight is enabled)
+    table.cell(aud, 0, 16, "VOLATILITY", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 16, atrVolWeight > 0 ? audVolTxt : "", text_color = audHas ? (audVolOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    table.cell(aud, 0, 17, "VOLUME", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 17, volWeight > 0 ? audVolConfTxt : "", text_color = audHas ? (audVolConfOk ? color.lime : color.red) : color.silver, text_size = size.small)
+    //--- Total (exact existing score)
+    table.cell(aud, 0, 18, "TOTAL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 18, audScoreTxt, text_color = color.white, text_size = size.normal)
+    //--- Price levels (exact existing ATR levels)
+    table.cell(aud, 0, 19, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 19, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
+    table.cell(aud, 0, 20, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 20, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
+    table.cell(aud, 0, 21, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 21, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
+    table.cell(aud, 0, 22, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 22, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
+    //--- Signal bar
+    table.cell(aud, 0, 23, "BAR", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 23, syminfo.ticker + " " + timeframe.period + "  " + (na(audBarTime) ? "--" : str.tostring(audBarTime, "yyyy-MM-dd HH:mm")), text_color = color.silver, text_size = size.small)
+    table.cell(aud, 0, 24, "CONFIRMED", text_color = color.silver, text_size = size.small)
+    table.cell(aud, 1, 24, audConfirmedTxt, text_color = color.lime, text_size = size.small)
+
+//--- Cleanup when the mode is off
+if not auditMode
     if not na(aud)
         table.delete(aud)
         aud := na
