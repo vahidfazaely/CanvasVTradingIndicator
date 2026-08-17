@@ -2,6 +2,23 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v2.5.0 — Phase 1 of Signal Engine v3: quality gates
+
+Date: 2026-08-17
+
+- **New hard gates** (a failure blocks the signal regardless of score; the existing score model is kept unchanged so the gate effect can be isolated):
+  - **4H REGIME:** EMA50 > EMA200 **and** strict rising slope (`EMA50 > EMA50[prev]`) **and** separation ≥ 0.10% (`Min 4H regime separation`). A **flat** EMA50 slope counts for neither direction → `NEUTRAL` regime → **no signal**. SELL mirrored. 4H slope made strict (`>`/`<`, was `>=`/`<=`).
+  - **1H MOMENTUM:** 1H close ≥ 1H EMA21 (BUY) / ≤ (SELL) — one new single-line `request.security(syminfo.tickerid, "60", close, lookahead_off)`, confirmed 1H candle only.
+  - **ENTRY STRUCTURE:** EMA9 > EMA21 and close ≥ EMA9 (BUY), mirrored for SELL, plus optional **EMA gap expansion** (default on).
+  - **CANDLE QUALITY:** close > open (BUY) / close < open (SELL) and body ≥ 50% of range (safe division; zero-range guard).
+  - **ADX floor:** ADX ≥ 18 now a hard gate (was score-only). Default minimum changed 20 → 18.
+  - **VOLATILITY floor:** ATR/close ≥ 0.05% (safe division).
+  - **CHASING:** |close − EMA9| / ATR ≤ 1.5 (no entries on already-extended bars).
+- **Audit Mode:** on a rejected candidate setup (a fresh confirmed crossover on a supported timeframe), the `REASON` row shows the **first failed gate** in pipeline order — `4H REGIME`, `1H CONFIRMATION`, `1H MOMENTUM`, `ENTRY STRUCTURE`, `CANDLE QUALITY`, `ADX`, `VOLATILITY`, `CHASING`, `OPTIONAL FILTERS`, or `SCORE TOO LOW` — distinguishing "setup rejected" from "setup passed but score too low".
+- **Panel:** the `H4 TREND` row now reflects the full regime (shows `NEUTRAL` when the slope is flat or separation is below the minimum). No new rows.
+- **Unchanged:** scoring model, Entry/SL/TP1/TP2 formulas, markers, levels, labels, alerts, TF policy (15m/1H/4H only), repaint methodology (single-line `request.security` ×7, `lookahead_off`, `barstate.isconfirmed`), config validation, all Pine build-compatibility constraints.
+- **No profitability claim** — requires backtesting.
+
 ## v2.4.0 — Signal-engine timeframe policy (15m / 1H / 4H only)
 
 Date: 2026-08-17

@@ -1,6 +1,6 @@
 # Strategy — CanvasV MTF Signal
 
-This document describes the **current baseline** (TradingView `v2.4.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v2.5.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
 
 ---
 
@@ -95,7 +95,29 @@ Setting a weight to 0 disables both the gate and the points for that component.
 
 ---
 
-## 7. Scoring
+## 7. Phase 1 quality gates (v2.5.0)
+
+Hard gates — any failure blocks the signal **regardless of score**. The existing score model is kept unchanged in v2.5.0 so the gate effect can be measured in isolation (a structural SL/TP and new scoring model come in later phases).
+
+| Gate | BUY rule | SELL rule | Default |
+|---|---|---|---|
+| 4H REGIME | EMA50 > EMA200 AND EMA50 > EMA50[prev] AND separation ≥ min | mirrored (strict <) | separation ≥ 0.10% |
+| 1H CONFIRMATION | 1H EMA21 > EMA50 | 1H EMA21 < EMA50 | — |
+| 1H MOMENTUM | 1H close ≥ 1H EMA21 | 1H close ≤ 1H EMA21 | on |
+| ENTRY STRUCTURE | EMA9 > EMA21 AND close ≥ EMA9 | EMA9 < EMA21 AND close ≤ EMA9 | — |
+| EMA GAP EXPANSION | (EMA9−EMA21) > previous gap | mirrored | on |
+| CANDLE QUALITY | close > open AND body ≥ 50% of range | mirrored | body ≥ 50% |
+| ADX FLOOR | ADX ≥ 18 | same | 18 |
+| VOLATILITY FLOOR | ATR/close ≥ 0.05% | same | 0.05% |
+| CHASING | \|close − EMA9\|/ATR ≤ 1.5 | mirrored | 1.5 ATR |
+
+A **flat 4H slope** (EMA50 == EMA50[prev]) counts for neither direction → `NEUTRAL` regime → no signal. A **converged regime** (separation below the minimum) is likewise rejected.
+
+In **Audit Mode**, a rejected candidate setup shows the **first failed gate** in the `REASON` row (`4H REGIME` / `1H CONFIRMATION` / `1H MOMENTUM` / `ENTRY STRUCTURE` / `CANDLE QUALITY` / `ADX` / `VOLATILITY` / `CHASING` / `OPTIONAL FILTERS` / `SCORE TOO LOW`), distinguishing "setup rejected" from "setup passed but score too low".
+
+---
+
+## 8. Scoring
 
 Each component contributes its weight when satisfied:
 
@@ -120,15 +142,21 @@ The panel header then reads `CONFIG ERROR` and the bottom row shows the reason (
 
 ---
 
-## 8. Signal conditions
+## 9. Signal conditions
 
 **BUY** (exact):
 
 ```
 chart timeframe is supported (15m / 1H / 4H)   // isSupportedSignalTF
-AND 4H bullish
-AND 1H bullish confirmation
+AND 4H regime bullish (EMA50 > EMA200 AND strict rising slope AND separation ≥ 0.10%)
+AND 1H confirmation (1H EMA21 > EMA50)
+AND 1H momentum (1H close ≥ 1H EMA21)
+AND entry structure (EMA9 > EMA21 AND close ≥ EMA9 AND gap expanding)
 AND bullish crossover (chart TF)
+AND candle quality (close > open AND body ≥ 50% of range)
+AND ADX ≥ 18
+AND ATR/close ≥ 0.05%
+AND |close − EMA9|/ATR ≤ 1.5
 AND all enabled optional gates pass
 AND score ≥ MinimumScore (default 75)
 ```
@@ -146,7 +174,7 @@ AND score ≥ StrongScore (default 100)
 
 ---
 
-## 9. ATR risk levels
+## 10. ATR risk levels
 
 ATR period 14, values of the closed signal candle, Entry = signal candle close:
 
@@ -161,7 +189,7 @@ Multipliers are configurable inputs.
 
 ---
 
-## 10. Closed-candle discipline / no repaint
+## 11. Closed-candle discipline / no repaint
 
 - Signals are only evaluated when `barstate.isconfirmed` (live bar) or on fully closed historical bars.
 - **H4 methodology:** each H4 value is a separate `request.security(syminfo.tickerid, "240", expr, lookahead = barmerge.lookahead_off)` call. With `lookahead_off` the value only updates when an H4 candle **completes**: during the forming H4 candle it holds the last closed H4 value and is step-constant (never rewrites history); at the exact H4 boundary bar it is the just-completed candle's final value, which is confirmed data at that bar's close. The slope baseline `h4e50PrevH` applies `[1]` **inside** the H4 context — one H4 candle before the last closed one, i.e. two consecutive confirmed H4 values.
@@ -171,7 +199,7 @@ Multipliers are configurable inputs.
 
 ---
 
-## 11. Defaults summary
+## 12. Defaults summary
 
 | Input | Default |
 |---|---|
@@ -179,15 +207,20 @@ Multipliers are configurable inputs.
 | 1H EMA Fast / Slow | 21 / 50 |
 | Entry EMA Fast / Slow (chart TF) | 9 / 21 |
 | Supported signal timeframes | 15m / 1H / 4H |
-| ADX weight / period / minimum | 25 / 14 / 20.0 |
+| ADX weight / period / minimum (gate) | 25 / 14 / 18.0 |
 | ATR period / SL / TP1 / TP2 | 14 / 1.5 / 1.5 / 3.0 |
 | Trend / 1H Conf / Slope weights | 25 / 25 / 25 |
 | Minimum score | 75 |
 | STRONG enabled / threshold | on / 100 |
+| Min 4H regime separation | 0.10% |
+| Require EMA gap expansion | on |
+| Min candle body | 50% |
+| Min volatility (ATR %) | 0.05% |
+| Max entry distance (ATR) | 1.5 |
 | Optional filters | all off |
 | Alerts | off |
 
-## 12. MT5 differences (Phase 2 v2.00)
+## 13. MT5 differences (Phase 2 v2.00)
 
 - Attached to an **M15 chart** (enforced at init).
 - Scoring is fixed at 25/25/25/25 (no weights input yet), minimum 75, no STRONG tier, no optional filters.

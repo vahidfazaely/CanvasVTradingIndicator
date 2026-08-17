@@ -48,6 +48,30 @@ For every **ENABLED** timeframe (15m / 1H / 4H) verify:
 - On 4H: the trend uses the chart series (self mode) — signals fire only at candle close, the panel reads the trend with `[1]`, and the **forming 4H candle never produces a signal**.
 - Signals appear only on closed candles (see §4).
 
+## 2a. Gate-by-gate test matrix (Phase 1, v2.5.0)
+
+Each gate must be verifiable independently. With `Signal Audit Mode` on, a rejected candidate shows the **first failed gate** in the `REASON` row.
+
+| # | Test | How | Expected |
+|---|---|---|---|
+| 1 | 5m blocked | Attach to 5m | `SIGNALS DISABLED` + reason; no markers/levels/labels/alerts |
+| 2 | 15m enabled | Attach to 15m | `SIGNAL ENGINE ENABLED`; signals fire |
+| 3 | 1H enabled | Attach to 1H | `SIGNAL ENGINE ENABLED`; signals fire |
+| 4 | 4H enabled | Attach to 4H | `SIGNAL ENGINE ENABLED`; signals only at candle close |
+| 5 | Flat 4H slope | Observe a 4H candle where EMA50 ≈ EMA50[prev] (or set Min separation = 99%) | Regime `NEUTRAL`; no signal; reason `4H REGIME` |
+| 6 | Insufficient 4H separation | Set `Min 4H regime separation` above the current value | No signal; reason `4H REGIME` |
+| 7 | Weak 1H momentum | Watch a 1H pullback (1H close below 1H EMA21 during an up-move) | No signal; reason `1H MOMENTUM` |
+| 8 | Invalid EMA structure | Observe a bar where close < EMA9 while EMA9 > EMA21 | No signal; reason `ENTRY STRUCTURE` |
+| 9 | No fresh crossover | Any bar without a cross | No signal; no REASON (no candidate) |
+| 10 | Bearish BUY candle | A BUY-candidate bar that closes below its open | No signal; reason `CANDLE QUALITY` |
+| 11 | Body < 50% | Set `Min candle body` = 99% | No signal; reason `CANDLE QUALITY` |
+| 12 | ADX < 18 | Set `ADX Minimum` = 99 | No signal; reason `ADX` |
+| 13 | ATR% < 0.05% | Set `Min volatility` = 99 | No signal; reason `VOLATILITY` |
+| 14 | Price > 1.5 ATR from EMA9 | Set `Max entry distance` = 0.1 | No signal; reason `CHASING` |
+| 15 | Valid setup, score decides | Restore defaults; on a candidate that passes all gates but scores < 75 | No signal; reason `SCORE TOO LOW`; a fully passing candidate produces a normal signal |
+
+Restore defaults after each test (panel shows `v2.5.0`).
+
 ## 3. Cross-check against built-in indicators
 
 Add TradingView's built-in indicators to a separate pane and compare with the panel:

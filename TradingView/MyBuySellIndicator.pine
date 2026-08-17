@@ -8,6 +8,7 @@
 //|  v2.2.0 - Signal Audit Mode (debug/diagnostic, presentation only)  |
 //|  v2.3.0 - TF architecture: 4H trend + 1H confirmation + 15M entry |
 //|  v2.4.0 - Signal engine policy: 15m / 1H / 4H only               |
+//|  v2.5.0 - Phase 1 (v3): quality gates                             |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend        : 4H EMA 50/200 + EMA 50 slope (closed 4H only)  |
@@ -40,7 +41,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v2.4.0"
+VERSION = "v2.5.0"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -58,21 +59,26 @@ grpAlerts = "=== Alerts ==="
 
 h4Fast = input.int(50,  "H4 EMA Fast", minval = 1, group = grpTrend)
 h4Slow = input.int(200, "H4 EMA Slow", minval = 2, group = grpTrend)
+min4hSep = input.float(0.10, "Min 4H regime separation (%)", minval = 0, maxval = 100, group = grpTrend)
 
 entryFast = input.int(9,  "M15 EMA Fast", minval = 1, group = grpEntry)
 entrySlow = input.int(21, "M15 EMA Slow", minval = 2, group = grpEntry)
+requireGapExpansion = input.bool(true, "Require EMA gap expansion", group = grpEntry)
+minBodyPct = input.float(50.0, "Min candle body (%)", minval = 0, maxval = 100, group = grpEntry)
 
 h1Fast = input.int(21, "1H EMA Fast", minval = 1, group = grpH1)
 h1Slow = input.int(50, "1H EMA Slow", minval = 2, group = grpH1)
 
 adxWeight = input.int(25,     "ADX Weight (0 = off)", minval = 0, group = grpAdx)
 adxPeriod = input.int(14,     "ADX Period",           minval = 1, group = grpAdx)
-adxMin    = input.float(20.0, "ADX Minimum", minval = 0, maxval = 100, group = grpAdx)
+adxMin    = input.float(18.0, "ADX Minimum", minval = 0, maxval = 100, group = grpAdx)
 
 atrPeriod  = input.int(14,     "ATR Period",          minval = 1, group = grpRisk)
 atrSlMult  = input.float(1.5,  "ATR SL Multiplier",   minval = 0.1, group = grpRisk)
 atrTp1Mult = input.float(1.5,  "ATR TP1 Multiplier",  minval = 0.1, group = grpRisk)
 atrTp2Mult = input.float(3.0,  "ATR TP2 Multiplier",  minval = 0.1, group = grpRisk)
+minVolPct   = input.float(0.05, "Min volatility (ATR % of price)", minval = 0, group = grpRisk)
+maxEntryDist = input.float(1.5, "Max entry distance from EMA9 (ATR)", minval = 0.1, group = grpRisk)
 
 trendWeight  = input.int(25, "Trend Weight (0 = off)",    minval = 0, group = grpScore)
 momWeight    = input.int(25, "1H Conf Weight (0 = off)", minval = 0, group = grpScore)
@@ -173,8 +179,13 @@ h1FastS = ta.ema(close, h1Fast)
 h1SlowS = ta.ema(close, h1Slow)
 h1FastV = isH1chart ? h1FastS : h1FastH
 h1SlowV = isH1chart ? h1SlowS : h1SlowH
+h1CloseH = request.security(syminfo.tickerid, "60", close, lookahead = barmerge.lookahead_off)
+h1CloseV = isH1chart ? close : h1CloseH
 h1ConfUp = h1FastV > h1SlowV
 h1ConfDn = h1FastV < h1SlowV
+//--- 1H momentum confirmation (HARD GATE): 1H close vs 1H EMA fast
+h1MomUp = h1CloseV >= h1FastV
+h1MomDn = h1CloseV <= h1FastV
 
 //--------------------------------------------------------------
 // Entry series: 15M entry timeframe (chart series on M15 charts)
@@ -190,16 +201,50 @@ atrVal = ta.atr(atrPeriod)
 //--------------------------------------------------------------
 isConfirmed = barstate.isconfirmed
 
-//--- H4 trend & slope (closed H4 values only)
+//--- H4 trend & slope (closed H4 values only). Slope is STRICT:
+//--- a flat EMA50 counts for neither direction (regime = NEUTRAL).
 h4Bull  = h4e50 > h4e200
 h4Bear  = h4e50 < h4e200
-slopeUp = h4e50 >= h4e50Prev
-slopeDn = h4e50 <= h4e50Prev
+slopeUp = h4e50 > h4e50Prev
+slopeDn = h4e50 < h4e50Prev
+//--- 4H regime (HARD GATE): direction + strict slope + min separation.
+//--- All values are confirmed 4H candles (lookahead_off / close-gated).
+sep4HOk = abs(h4e50 - h4e200) / math.max(h4e200, 1e-10) * 100 >= min4hSep
+regimeUpOk = h4Bull and slopeUp and sep4HOk
+regimeDnOk = h4Bear and slopeDn and sep4HOk
 
 //--- Entry crossover (evaluated at bar close only)
 crossUp = ta.crossover(emaF, emaS)
 crossDn = ta.crossunder(emaF, emaS)
 adxPass = adxVal >= adxMin
+
+//--------------------------------------------------------------
+// Phase 1 quality gates (HARD GATES - a failure blocks the signal
+// regardless of score; the existing score model is kept unchanged)
+//--------------------------------------------------------------
+//--- Entry setup structure: EMA relationship + price position
+setupUp = emaF > emaS and close >= emaF
+setupDn = emaF < emaS and close <= emaF
+//--- EMA gap expansion (configurable, default on)
+gapUp = emaF - emaS
+gapDn = emaS - emaF
+gapUpExp = not requireGapExpansion or gapUp > gapUp[1]
+gapDnExp = not requireGapExpansion or gapDn > gapDn[1]
+setupGateUp = setupUp and gapUpExp
+setupGateDn = setupDn and gapDnExp
+//--- Candle quality: direction + minimum body (safe division)
+candleRange = high - low
+candleBodyPct = candleRange > 0 ? abs(close - open) / candleRange * 100 : 0.0
+candleUpOk = close > open and candleBodyPct >= minBodyPct
+candleDnOk = close < open and candleBodyPct >= minBodyPct
+//--- ADX floor (was score-only; now also a hard gate)
+adxGateOk = adxVal >= adxMin
+//--- Volatility floor: ATR as % of price (safe division)
+atrPct = atrVal / math.max(close, 1e-10) * 100
+volFloorOk = atrPct >= minVolPct
+//--- Chasing filter: price distance from EMA9 in ATR units
+entryDistAtr = abs(close - emaF) / math.max(atrVal, 1e-10)
+chaseGateOk = entryDistAtr <= maxEntryDist
 
 //--------------------------------------------------------------
 // Optional filters (all OFF by default, direction-aware)
@@ -218,8 +263,7 @@ priceDnOk = not enablePriceAbove or close <= emaS
 htfUpOk = not enableHtfMom or close >= h4momEma
 htfDnOk = not enableHtfMom or close <= h4momEma
 
-//--- Volatility regime (ATR as % of price)
-atrPct   = atrVal / close * 100
+//--- Volatility regime (ATR as % of price; atrPct defined above)
 volOk    = not (atrVolWeight > 0) or atrPct >= atrMinPct
 
 //--- Volume confirmation (tick/real volume depending on feed)
@@ -251,9 +295,9 @@ sellScore = (h4Bear   ? trendWeight : 0) + (h1ConfDn ? momWeight : 0) + (adxPass
 //--- On unsupported charts isSupportedSignalTF is false, so the
 //--- signal engine (and therefore markers, levels, labels and
 //--- alerts) cannot fire.
-buySig  = isConfirmed and configOk and isSupportedSignalTF and h4Bull and h1ConfUp and crossUp and buyGate  and buyScore  >= minScore
+buySig  = isConfirmed and configOk and isSupportedSignalTF and regimeUpOk and h1ConfUp and h1MomUp and setupGateUp and crossUp and candleUpOk and adxGateOk and volFloorOk and chaseGateOk and buyGate  and buyScore  >= minScore
 //--- SELL mirrors BUY
-sellSig = isConfirmed and configOk and isSupportedSignalTF and h4Bear and h1ConfDn and crossDn and sellGate and sellScore >= minScore
+sellSig = isConfirmed and configOk and isSupportedSignalTF and regimeDnOk and h1ConfDn and h1MomDn and setupGateDn and crossDn and candleDnOk and adxGateOk and volFloorOk and chaseGateOk and sellGate and sellScore >= minScore
 
 //--- STRONG signals: higher score threshold (configurable, optional)
 strongBuy  = buySig  and enableStrong and buyScore  >= strongScore
@@ -582,12 +626,19 @@ alertcondition(sellSig and not strongSell, title = "CanvasV SELL",        messag
 // LAST SIGNAL     : the frozen state of the latest confirmed signal.
 //--------------------------------------------------------------
 panelE50  = isH4chart ? h4e50[1]  : h4e50
+panelE50Prev = isH4chart ? h4e50[2] : h4e50PrevH
 panelE200 = isH4chart ? h4e200[1] : h4e200
 panelH1Fast = isH1chart ? h1FastS[1] : h1FastH
 panelH1Slow = isH1chart ? h1SlowS[1] : h1SlowH
 
 trendLbl = "H4 TREND"
-trendTxt = panelE50 > panelE200 ? "BULLISH" : panelE50 < panelE200 ? "BEARISH" : "NEUTRAL"
+//--- Regime shown in the panel (stable values: previous closed 4H on the
+//--- 4H chart, last closed 4H elsewhere). NEUTRAL when the slope is flat
+//--- or the separation is below the minimum.
+panelSepOk = abs(panelE50 - panelE200) / math.max(panelE200, 1e-10) * 100 >= min4hSep
+panelRegUp = panelE50 > panelE200 and panelE50 > panelE50Prev and panelSepOk
+panelRegDn = panelE50 < panelE200 and panelE50 < panelE50Prev and panelSepOk
+trendTxt = panelRegUp ? "BULLISH" : panelRegDn ? "BEARISH" : "NEUTRAL"
 h1MomTxt = panelH1Fast > panelH1Slow ? "BULLISH" : panelH1Fast < panelH1Slow ? "BEARISH" : "NEUTRAL"
 h1MomCol = h1MomTxt == "BULLISH" ? color.lime : h1MomTxt == "BEARISH" ? color.red : color.silver
 
@@ -676,6 +727,18 @@ audModeTxt      = isSupportedSignalTF ? "ENABLED" : "DISABLED"
 audModeCol      = isSupportedSignalTF ? color.lime : color.red
 audConfirmedTxt = isSupportedSignalTF ? "YES - closed candle" : "NO - signals disabled"
 
+//--- Rejection reason (audit only): for a fresh confirmed crossover on a
+//--- supported timeframe whose setup was rejected, show the FIRST failed
+//--- gate in pipeline order. Empty when no candidate was rejected.
+var string rejectTxt = ""
+rejectTxt := ""
+isCandidateUp = isConfirmed and configOk and isSupportedSignalTF and crossUp
+isCandidateDn = isConfirmed and configOk and isSupportedSignalTF and crossDn
+if isCandidateUp
+    rejectTxt := not regimeUpOk ? "4H REGIME" : not h1ConfUp ? "1H CONFIRMATION" : not h1MomUp ? "1H MOMENTUM" : not setupGateUp ? "ENTRY STRUCTURE" : not candleUpOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not buyGate ? "OPTIONAL FILTERS" : buyScore < minScore ? "SCORE TOO LOW" : ""
+if isCandidateDn
+    rejectTxt := not regimeDnOk ? "4H REGIME" : not h1ConfDn ? "1H CONFIRMATION" : not h1MomDn ? "1H MOMENTUM" : not setupGateDn ? "ENTRY STRUCTURE" : not candleDnOk ? "CANDLE QUALITY" : not adxGateOk ? "ADX" : not volFloorOk ? "VOLATILITY" : not chaseGateOk ? "CHASING" : not sellGate ? "OPTIONAL FILTERS" : sellScore < minScore ? "SCORE TOO LOW" : ""
+
 var table aud = na
 
 if auditMode
@@ -690,9 +753,10 @@ if auditMode
     table.cell(aud, 1, 1, signalTfTxt, text_color = color.white,   text_size = size.normal)
     table.cell(aud, 0, 2, "SIGNAL MODE", text_color = color.silver, text_size = size.small)
     table.cell(aud, 1, 2, audModeTxt, text_color = audModeCol,     text_size = size.normal)
-    //--- Reason (unsupported timeframes only)
+    //--- Reason: blocked timeframe, or the first failed gate of a
+    //--- rejected candidate setup (supported timeframes)
     table.cell(aud, 0, 3, "REASON", text_color = color.silver, text_size = size.small)
-    table.cell(aud, 1, 3, isSupportedSignalTF ? "" : tfReasonTxt, text_color = color.red, text_size = size.small)
+    table.cell(aud, 1, 3, isSupportedSignalTF ? rejectTxt : tfReasonTxt, text_color = color.red, text_size = size.small)
 
 //--- Detail rows (supported signal timeframes only). Separate top-level
 //--- if: the target Pine build does not support the 'end' keyword, so
