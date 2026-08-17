@@ -28,11 +28,12 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 ## TradingView version
 
 - **Works on every chart timeframe** (1m, 3m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 12H, 1D, 1W).
-- **H4 trend** is fetched with `request.security(..., "240", lookahead = barmerge.lookahead_off)` — always the **last closed H4 candle**, never the forming one, so it cannot repaint.
+- **H4 trend** is fetched with four single-line `request.security(..., "240", lookahead = barmerge.lookahead_off)` calls — one per value, each guaranteed to hold the **last completed H4 candle** (step-constant during the forming H4 candle; signals only ever see confirmed H4 values). No repaint, no lookahead.
 - When the chart timeframe is **≥ H4** (4H, 6H, 12H, D, W), the trend is computed on the chart timeframe itself ("self mode") and labelled in the panel.
 - **Entry** (EMA 9/21 cross, ADX, ATR) always uses the **current chart timeframe** and fires only on **confirmed closed candles** (`barstate.isconfirmed`).
 - **Configurable scoring weights** with a default equivalent to the original 100-point model (25/25/25/25, minimum 75), plus optional **STRONG BUY / STRONG SELL** (threshold 100).
 - **Optional quality filters** (all off by default): EMA separation %, price vs EMA 21, H4 momentum, ATR volatility regime, volume confirmation.
+- **Config validation:** EMA periods must satisfy Fast < Slow, not all weights can be zero, and the minimum score cannot exceed the maximum achievable score — otherwise signals are suppressed and the panel shows `CONFIG ERROR` with the reason.
 - **Visuals:** H4 EMAs, entry EMAs, BUY/SELL/STRONG markers, the latest Entry/SL/TP1/TP2 lines, and a compact info panel — every element individually toggleable.
 
 ## MT5 version
@@ -77,9 +78,10 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 
 This is a hard requirement, not a preference:
 
-- Signals are only generated **after the signal candle closes**.
-- Higher-timeframe values are always the **last closed H4 candle** (confirmed, step-constant values).
-- No `lookahead_on`, no `[1]`-style future data, no `request.security` with lookahead.
+- Signals are only generated **after the signal candle closes** (`barstate.isconfirmed`).
+- Higher-timeframe values are the **last completed H4 candle**: with `lookahead_off`, each H4 value is step-constant during the forming H4 candle and only updates when an H4 candle completes. At the exact H4 boundary bar the value is the just-completed candle's final value — confirmed data at that bar's close.
+- The H4 EMA 50 slope compares **two consecutive closed H4 candles** (`[1]` applied *inside* the H4 context of `request.security`).
+- No `lookahead_on` is used anywhere.
 - A signal, once printed, never moves or disappears.
 
 See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
@@ -94,6 +96,6 @@ See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
 
 ## Development status
 
-- **TradingView:** multi-timeframe baseline `v2.0.0` — working and compiling in the Pine Editor.
+- **TradingView:** multi-timeframe baseline `v2.0.1` (hardening release: HTF confirmation audit, config validation, na-safe level redraw) — working and compiling in the Pine Editor.
 - **MT5:** Phase 2 `v2.00` — working on M15 charts.
 - **Next milestone:** a Pine `strategy()` backtest version (planned, not yet implemented).

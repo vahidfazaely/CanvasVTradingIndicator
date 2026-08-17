@@ -48,7 +48,18 @@ This is the most important test. Procedure:
 4. Scroll far back in history: arrows on old bars must be stable across reloads.
 5. Switch the chart timeframe and switch back — signal placement must not change.
 
-The design guarantees: H4 values come from the **last closed H4 candle** (`lookahead_off`, step-constant), entry signals are gated by `barstate.isconfirmed`, and no `lookahead_on` is used.
+The design guarantees: H4 values come from the **last completed H4 candle** (`lookahead_off`, step-constant during the forming H4 candle), entry signals are gated by `barstate.isconfirmed`, and no `lookahead_on` is used.
+
+### Specific HTF (H4) repaint test
+
+1. Attach to an **M15** chart.
+2. Note the panel's H4 Trend field while an H4 candle is **forming**: it must read a fixed BULLISH/BEARISH value and **must not change** as M15 ticks arrive during that H4 candle.
+3. When the H4 candle closes (on the 4-hour grid boundary), the panel may flip — a legitimate update to the newly completed candle.
+4. The **H4 EMA 50/200 lines on the chart must be flat** throughout each forming H4 candle (step-constant), never sloping tick-by-tick.
+5. Scroll back across a previous H4 boundary: the H4 value shown on each M15 bar must equal the last H4 candle that completed at or before that bar's close time.
+6. Reload the chart: every historical H4 value and signal must be identical to the pre-reload state.
+
+A failure of steps 2, 4, or 6 is a repaint bug.
 
 ## 5. Alerts
 
@@ -80,7 +91,18 @@ For each optional filter (EMA separation, price vs EMA21, H4 momentum, ATR volat
 2. Set a permissive threshold — signals should return.
 3. Verify the score/max updates when weights are changed.
 
-## 8. MT5 parity (informational)
+## 8. Config validation
+
+With invalid settings, the panel must show `CONFIG ERROR` (red header) with a reason, and **no signals may fire**:
+
+1. Set H4 EMA Fast = 200, Slow = 50 (fast ≥ slow) → reason `EMA fast >= slow`.
+2. Set all scoring weights to 0 → reason `all weights are 0`.
+3. Set Minimum Score = 200 with default weights (max 100) → reason `min score > max`.
+4. Restore defaults → the header returns to `MARKET` and signals resume.
+
+Each change must take effect immediately after re-running the script on the chart.
+
+## 9. MT5 parity (informational)
 
 The TradingView and MT5 versions implement the same core logic but are **not** expected to be tick-identical:
 
@@ -88,6 +110,6 @@ The TradingView and MT5 versions implement the same core logic but are **not** e
 - The MT5 version is M15-attached and has fixed 25/25/25/25 scoring; the TradingView version is multi-timeframe with configurable weights.
 - Compare *patterns* (same signals on the same dates at the same H4 alignment), not exact arrow positions.
 
-## 9. Backtest (future)
+## 10. Backtest (future)
 
 A Pine `strategy()` backtest version is planned. Until then, manual chart verification is the primary testing method.

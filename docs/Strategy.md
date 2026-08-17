@@ -1,6 +1,6 @@
 # Strategy — MyBuySellIndicator
 
-This document describes the **current baseline** (TradingView `v2.0.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v2.0.1` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
 
 ---
 
@@ -16,8 +16,8 @@ This document describes the **current baseline** (TradingView `v2.0.0` / MT5 Pha
 
 ### TradingView multi-timeframe behaviour
 
-- Chart TF **< H4**: trend comes from `request.security(syminfo.tickerid, "240", ..., lookahead = barmerge.lookahead_off)` → the **last closed H4 candle**.
-- Chart TF **≥ H4** (4H/6H/12H/D/W): trend is computed on the **chart timeframe itself** (self mode) and the panel labels it `Trend (chart TF)`. On 4H this is identical to H4.
+- Chart TF **< H4**: trend comes from four single-line `request.security(syminfo.tickerid, "240", ..., lookahead = barmerge.lookahead_off)` calls → the **last closed H4 candle** (confirmed, step-constant).
+- Chart TF **≥ H4** (4H/6H/12H/D/W): trend is computed on the **chart timeframe itself** (self mode) and the panel labels it `Trend (chart TF)`. On a 4H chart this is exactly H4. On 6H/12H/D/W it is **not** the H4 trend — it is the trend of the chart timeframe (a slower EMA 50/200). This is a deliberate consequence of self mode, not a bug: the strategy's "higher timeframe" horizon becomes the chart timeframe itself, so the trend horizon is never *below* the entry horizon. If literal H4 trend filtering is required on 6H+ charts, that is a future change.
 - Entry EMAs, ADX and ATR always use the current chart timeframe.
 
 ---
@@ -68,7 +68,12 @@ Evaluated only on **closed candles**.
 | ATR volatility | `ATR/close × 100 ≥ min` | off, min 0.05 % |
 | Volume | `volume ≥ SMA(volume, 20) × ratio` | off, ratio 1.0 |
 
-SELL rules are mirrored (`close ≤ emaS`, `close ≤ H4 EMA`, etc.). When enabled, a filter is a **gate**: the signal does not fire unless it passes. Filters do not add points unless their weight is set.
+SELL rules are mirrored (`close ≤ emaS`, `close ≤ H4 EMA`, etc.). There are two distinct roles:
+
+- **Gate conditions** — the signal does not fire unless the filter passes. This applies to the H4 trend and the EMA crossover (always gates) and to every optional filter when enabled (separation, price vs EMA 21, H4 momentum) or when its weight is > 0 (volatility, volume).
+- **Scoring components** — volatility and volume add points (`atrVolWeight`, `volWeight`) when their condition passes. Separation / price vs EMA 21 / H4 momentum have no weight inputs, so they gate but never score.
+
+Setting a weight to 0 disables both the gate and the points for that component.
 
 ---
 
@@ -86,6 +91,14 @@ Each component contributes its weight when satisfied:
 | Volume | 0 | Volume ok | Volume ok |
 
 `maxScore = sum of enabled weights` (default 100). A disabled component contributes 0 to both score and max.
+
+**Config validation:** signals are suppressed when the inputs are internally inconsistent:
+
+- any EMA Fast ≥ its Slow (H4 or entry),
+- all weights are 0 (`maxScore = 0`),
+- `MinimumScore > maxScore`.
+
+The panel header then reads `CONFIG ERROR` and the bottom row shows the reason (`EMA fast >= slow`, `all weights are 0`, `min score > max`). Weight inputs are clamped to ≥ 0 in the settings UI, so negative weights are not possible.
 
 ---
 
@@ -131,8 +144,8 @@ Multipliers are configurable inputs.
 ## 9. Closed-candle discipline / no repaint
 
 - Signals are only evaluated when `barstate.isconfirmed` (live bar) or on fully closed historical bars.
-- H4 values are step-constant during each H4 bar (confirmed close values from `lookahead_off`), so they can never rewrite history.
-- Arrows, level lines, labels and alerts are created once per signal from closed data and are never re-evaluated.
+- **H4 methodology:** each H4 value is a separate `request.security(syminfo.tickerid, "240", expr, lookahead = barmerge.lookahead_off)` call. With `lookahead_off` the value only updates when an H4 candle **completes**: during the forming H4 candle it holds the last closed H4 value and is step-constant (never rewrites history); at the exact H4 boundary bar it is the just-completed candle's final value, which is confirmed data at that bar's close. The slope baseline `h4e50PrevH` applies `[1]` **inside** the H4 context — one H4 candle before the last closed one, i.e. two consecutive confirmed H4 values.
+- Arrows, level lines, labels and alerts are created once per signal from closed data and are never re-evaluated; the latest-signal state is frozen in `var` variables and replaced only by a newer confirmed signal.
 - There is no `lookahead_on` anywhere in the code.
 
 ---

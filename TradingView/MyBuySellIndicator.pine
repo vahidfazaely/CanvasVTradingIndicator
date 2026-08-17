@@ -2,6 +2,7 @@
 //+------------------------------------------------------------------+
 //|  MyBuySellIndicator - TradingView (Pine Script v5)               |
 //|  Multi-timeframe version of the MT5 Phase 2 logic               |
+//|  v2.0.1 - hardening release (validation + repaint proof)        |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend filter : H4 EMA 50/200 + EMA 50 slope (closed H4 only)  |
@@ -12,13 +13,26 @@
 //|  is computed on the chart timeframe itself ("self mode") and    |
 //|  labelled in the panel.                                         |
 //|                                                                  |
-//|  H4 values use request.security with barmerge.lookahead_off,    |
-//|  i.e. the LAST CLOSED H4 candle - never the forming one.        |
+//|  H4 NON-REPAINT METHODOLOGY                                     |
+//|   Each H4 value is a SEPARATE request.security call with        |
+//|   lookahead = barmerge.lookahead_off. With lookahead_off the    |
+//|   value only updates when an H4 candle COMPLETES: during the    |
+//|   forming H4 candle it holds the last closed H4 value and is    |
+//|   step-constant (it never rewrites history). At the exact H4    |
+//|   boundary bar the value is the just-completed candle's final   |
+//|   value - confirmed data at that bar's close. The [1] is        |
+//|   applied INSIDE the H4 context, so h4e50PrevH is one H4        |
+//|   candle older than h4e50H (the slope baseline). Signals are    |
+//|   additionally gated by barstate.isconfirmed, so a forming      |
+//|   value can never reach a signal - no lookahead, no repaint.    |
 //+------------------------------------------------------------------+
 indicator("My Buy/Sell Scalper - MTF", shorttitle = "MyBS MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
+//--- Build version shown in the panel
+VERSION = "v2.0.1"
+
 //--------------------------------------------------------------
-// Inputs
+// Inputs (validated: no negative weights, no zero periods)
 //--------------------------------------------------------------
 grpTrend  = "=== Trend ==="
 grpEntry  = "=== Entry ==="
@@ -30,38 +44,38 @@ grpVis    = "=== Visuals ==="
 grpPanel  = "=== Panel ==="
 grpAlerts = "=== Alerts ==="
 
-h4Fast = input.int(50,  "H4 EMA Fast", group = grpTrend)
-h4Slow = input.int(200, "H4 EMA Slow", group = grpTrend)
+h4Fast = input.int(50,  "H4 EMA Fast", minval = 1, group = grpTrend)
+h4Slow = input.int(200, "H4 EMA Slow", minval = 2, group = grpTrend)
 
-entryFast = input.int(9,  "Entry EMA Fast", group = grpEntry)
-entrySlow = input.int(21, "Entry EMA Slow", group = grpEntry)
+entryFast = input.int(9,  "Entry EMA Fast", minval = 1, group = grpEntry)
+entrySlow = input.int(21, "Entry EMA Slow", minval = 2, group = grpEntry)
 
-adxWeight = input.int(25,     "ADX Weight (0 = off)", group = grpAdx)
-adxPeriod = input.int(14,     "ADX Period",           group = grpAdx)
-adxMin    = input.float(20.0, "ADX Minimum",          group = grpAdx)
+adxWeight = input.int(25,     "ADX Weight (0 = off)", minval = 0, group = grpAdx)
+adxPeriod = input.int(14,     "ADX Period",           minval = 1, group = grpAdx)
+adxMin    = input.float(20.0, "ADX Minimum", minval = 0, maxval = 100, group = grpAdx)
 
-atrPeriod  = input.int(14,     "ATR Period",         group = grpRisk)
-atrSlMult  = input.float(1.5,  "ATR SL Multiplier",  group = grpRisk)
-atrTp1Mult = input.float(1.5,  "ATR TP1 Multiplier", group = grpRisk)
-atrTp2Mult = input.float(3.0,  "ATR TP2 Multiplier", group = grpRisk)
+atrPeriod  = input.int(14,     "ATR Period",          minval = 1, group = grpRisk)
+atrSlMult  = input.float(1.5,  "ATR SL Multiplier",   minval = 0.1, group = grpRisk)
+atrTp1Mult = input.float(1.5,  "ATR TP1 Multiplier",  minval = 0.1, group = grpRisk)
+atrTp2Mult = input.float(3.0,  "ATR TP2 Multiplier",  minval = 0.1, group = grpRisk)
 
-trendWeight  = input.int(25, "Trend Weight (0 = off)",   group = grpScore)
-momWeight    = input.int(25, "Momentum Weight (0 = off)",group = grpScore)
-slopeWeight  = input.int(25, "Slope Weight (0 = off)",   group = grpScore)
-minScore     = input.int(75, "Minimum Signal Score",     group = grpScore)
+trendWeight  = input.int(25, "Trend Weight (0 = off)",    minval = 0, group = grpScore)
+momWeight    = input.int(25, "Momentum Weight (0 = off)", minval = 0, group = grpScore)
+slopeWeight  = input.int(25, "Slope Weight (0 = off)",    minval = 0, group = grpScore)
+minScore     = input.int(75, "Minimum Signal Score", minval = 0, maxval = 1000, group = grpScore)
 enableStrong = input.bool(true, "Enable STRONG signals", group = grpScore)
-strongScore  = input.int(100, "STRONG score threshold",  group = grpScore)
+strongScore  = input.int(100, "STRONG score threshold", minval = 0, maxval = 1000, group = grpScore)
 
-enableSeparation = input.bool(false, "Require EMA separation",    group = grpOpt)
-minSeparation    = input.float(0.05, "Min EMA separation (%)",    group = grpOpt)
+enableSeparation = input.bool(false, "Require EMA separation", group = grpOpt)
+minSeparation    = input.float(0.05, "Min EMA separation (%)", minval = 0, group = grpOpt)
 enablePriceAbove = input.bool(false, "Require price on EMA21 side", group = grpOpt)
 enableHtfMom     = input.bool(false, "Require H4 momentum (price vs H4 EMA)", group = grpOpt)
-htfMomEma        = input.int(21,     "H4 momentum EMA period",    group = grpOpt)
-atrVolWeight     = input.int(0,      "Volatility Weight (0 = off)", group = grpOpt)
-atrMinPct        = input.float(0.05, "Min ATR (% of price)",      group = grpOpt)
-volWeight        = input.int(0,      "Volume Weight (0 = off)",   group = grpOpt)
-volPeriod        = input.int(20,     "Volume SMA period",         group = grpOpt)
-volMult          = input.float(1.0,  "Volume min ratio (vol >= SMA * ratio)", group = grpOpt)
+htfMomEma        = input.int(21,     "H4 momentum EMA period", minval = 1, group = grpOpt)
+atrVolWeight     = input.int(0,      "Volatility Weight (0 = off)", minval = 0, group = grpOpt)
+atrMinPct        = input.float(0.05, "Min ATR (% of price)", minval = 0, group = grpOpt)
+volWeight        = input.int(0,      "Volume Weight (0 = off)", minval = 0, group = grpOpt)
+volPeriod        = input.int(20,     "Volume SMA period", minval = 1, group = grpOpt)
+volMult          = input.float(1.0,  "Volume min ratio (vol >= SMA * ratio)", minval = 0, group = grpOpt)
 
 showH4EMAs   = input.bool(true, "Show H4 EMA 50/200",    group = grpVis)
 showEntryEMAs = input.bool(true, "Show Entry EMA 9/21",  group = grpVis)
@@ -80,18 +94,23 @@ isH4plus = timeframe.in_seconds(timeframe.period) >= 14400
 //--------------------------------------------------------------
 // HTF (H4) trend series - confirmed values only
 //--------------------------------------------------------------
-// Chart TF < H4 : H4 data of the LAST CLOSED H4 candle via
-//                 request.security(..., lookahead_off). The
-//                 [1] inside the H4 context shifts one H4 bar,
-//                 so h4e50Prev is the H4 candle before the last
-//                 closed one (used for the slope). Both values
-//                 stay constant during the whole H4 bar and
-//                 never repaint.
-// Chart TF >= H4: the chart's own series (self mode). Signals
-//                 are still gated by barstate.isconfirmed.
-[h4e50H, h4e50PrevH, h4e200H, h4momH] = request.security(syminfo.tickerid, "240",
-    [ta.ema(close, h4Fast), ta.ema(close, h4Fast)[1], ta.ema(close, h4Slow), ta.ema(close, htfMomEma)],
-    lookahead = barmerge.lookahead_off)
+// Each value is requested SEPARATELY, each on a single line.
+// With lookahead = barmerge.lookahead_off the value only updates
+// when an H4 candle COMPLETES: during the forming H4 candle it
+// holds the last closed H4 value and is step-constant, so it
+// never rewrites history. A forming H4 value can never reach a
+// signal (which also requires barstate.isconfirmed).
+//
+// h4e50H     : EMA50 of the last closed H4 candle
+// h4e50PrevH : EMA50 one H4 candle BEFORE the last closed one
+//              ([1] is applied inside the H4 context) - this is
+//              the slope baseline
+// h4e200H    : EMA200 of the last closed H4 candle
+// h4momH     : EMA(htfMomEma) of the last closed H4 candle
+h4e50H     = request.security(syminfo.tickerid, "240", ta.ema(close, h4Fast),    lookahead = barmerge.lookahead_off)
+h4e50PrevH = request.security(syminfo.tickerid, "240", ta.ema(close, h4Fast)[1], lookahead = barmerge.lookahead_off)
+h4e200H    = request.security(syminfo.tickerid, "240", ta.ema(close, h4Slow),    lookahead = barmerge.lookahead_off)
+h4momH     = request.security(syminfo.tickerid, "240", ta.ema(close, htfMomEma), lookahead = barmerge.lookahead_off)
 
 //--- Chart-TF values (used when chart TF >= H4, self mode)
 h4e50S     = ta.ema(close, h4Fast)
@@ -163,13 +182,22 @@ sellGate = sepSellOk and priceDnOk and htfDnOk and volOk and volConfOk
 //--------------------------------------------------------------
 maxScore = trendWeight + momWeight + adxWeight + slopeWeight + atrVolWeight + volWeight
 
+//--- Config guards: EMA periods must be sane, weights must be >= 0
+//--- (input minval), not all weights can be zero, and the minimum
+//--- score can never exceed the maximum achievable score. Any
+//--- violation blocks signals and shows the reason in the panel.
+periodsOk = h4Fast < h4Slow and entryFast < entrySlow
+scoreOk   = maxScore > 0 and minScore <= maxScore
+configOk  = periodsOk and scoreOk
+cfgReason = not periodsOk ? "EMA fast >= slow" : maxScore <= 0 ? "all weights are 0" : minScore > maxScore ? "min score > max" : ""
+
 buyScore  = (h4Bull   ? trendWeight : 0) + (crossUp  ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeUp  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
 sellScore = (h4Bear   ? trendWeight : 0) + (crossDn  ? momWeight : 0) + (adxPass ? adxWeight : 0) + (slopeDn  ? slopeWeight : 0) + (volOk ? atrVolWeight : 0) + (volConfOk ? volWeight : 0)
 
 //--- BUY requires H4 bullish AND bullish crossover AND score >= minimum
-buySig  = isConfirmed and h4Bull and crossUp and buyGate  and buyScore  >= minScore
+buySig  = isConfirmed and configOk and h4Bull and crossUp and buyGate  and buyScore  >= minScore
 //--- SELL requires H4 bearish AND bearish crossover AND score >= minimum
-sellSig = isConfirmed and h4Bear and crossDn and sellGate and sellScore >= minScore
+sellSig = isConfirmed and configOk and h4Bear and crossDn and sellGate and sellScore >= minScore
 
 //--- STRONG signals: higher score threshold (configurable, optional)
 strongBuy  = buySig  and enableStrong and buyScore  >= strongScore
@@ -230,7 +258,6 @@ var int   lastSigBar  = na
 // On a new confirmed BUY / STRONG BUY: remember + redraw levels
 //--------------------------------------------------------------
 if buySig
-    hadPrevSignal = not na(lastSigBar)
     lastSigType := strongBuy ? 2 : 1
     lastScore   := buyScore
     lastMax     := maxScore
@@ -244,14 +271,23 @@ if buySig
     lastTP2     := tp2Buy
     lastSigBar  := bar_index
 
-    if hadPrevSignal
+    //--- Remove the previous signal's levels (na-safe: a signal may
+    //--- have fired while showLevels was off, leaving na ids)
+    if not na(lnEntry)
         line.delete(lnEntry)
+    if not na(lnSL)
         line.delete(lnSL)
+    if not na(lnTP1)
         line.delete(lnTP1)
+    if not na(lnTP2)
         line.delete(lnTP2)
+    if not na(lblEntry)
         label.delete(lblEntry)
+    if not na(lblSL)
         label.delete(lblSL)
+    if not na(lblTP1)
         label.delete(lblTP1)
+    if not na(lblTP2)
         label.delete(lblTP2)
 
     if showLevels
@@ -269,7 +305,6 @@ if buySig
 // On a new confirmed SELL / STRONG SELL: remember + redraw levels
 //--------------------------------------------------------------
 if sellSig
-    hadPrevSignal = not na(lastSigBar)
     lastSigType := strongSell ? -2 : -1
     lastScore   := sellScore
     lastMax     := maxScore
@@ -283,14 +318,22 @@ if sellSig
     lastTP2     := tp2Sell
     lastSigBar  := bar_index
 
-    if hadPrevSignal
+    //--- Remove the previous signal's levels (na-safe)
+    if not na(lnEntry)
         line.delete(lnEntry)
+    if not na(lnSL)
         line.delete(lnSL)
+    if not na(lnTP1)
         line.delete(lnTP1)
+    if not na(lnTP2)
         line.delete(lnTP2)
+    if not na(lblEntry)
         label.delete(lblEntry)
+    if not na(lblSL)
         label.delete(lblSL)
+    if not na(lblTP1)
         label.delete(lblTP1)
+    if not na(lblTP2)
         label.delete(lblTP2)
 
     if showLevels
@@ -315,20 +358,28 @@ else if showLevels != prevShowLevels
     if not showLevels
         if not na(lnEntry)
             line.delete(lnEntry)
+            lnEntry := na
         if not na(lnSL)
             line.delete(lnSL)
+            lnSL := na
         if not na(lnTP1)
             line.delete(lnTP1)
+            lnTP1 := na
         if not na(lnTP2)
             line.delete(lnTP2)
+            lnTP2 := na
         if not na(lblEntry)
             label.delete(lblEntry)
+            lblEntry := na
         if not na(lblSL)
             label.delete(lblSL)
+            lblSL := na
         if not na(lblTP1)
             label.delete(lblTP1)
+            lblTP1 := na
         if not na(lblTP2)
             label.delete(lblTP2)
+            lblTP2 := na
     else
         if not na(lastSigBar)
             lnEntry := line.new(lastSigBar, lastEntry,  lastSigBar, lastEntry,  extend = extend.right, color = color.new(color.blue, 0),  style = line.style_dotted, width = 2)
@@ -371,62 +422,78 @@ alertcondition(strongSell,                 title = "MyBS STRONG SELL", message =
 alertcondition(sellSig and not strongSell, title = "MyBS SELL",        message = "MyBS SELL signal")
 
 //--------------------------------------------------------------
-// Info panel (upper-right), built from CLOSED data only
+// Info panel (upper-right)
 //--------------------------------------------------------------
+// MARKET section  : state as of the last CLOSED bar (confirmed).
+//                   In self mode (chart TF >= H4) the trend is read
+//                   with [1] so it is never the forming bar.
+// LAST SIGNAL     : the frozen state of the latest confirmed signal.
+//--------------------------------------------------------------
+panelE50  = isH4plus ? h4e50[1]  : h4e50
+panelE200 = isH4plus ? h4e200[1] : h4e200
+
 trendLbl    = isH4plus ? "Trend (chart TF)" : "H4 Trend"
-trendTxt    = h4Bull ? "BULLISH" : h4Bear ? "BEARISH" : "NEUTRAL"
+trendTxt    = panelE50 > panelE200 ? "BULLISH" : panelE50 < panelE200 ? "BEARISH" : "NEUTRAL"
 momentumTxt = emaF[1] > emaS[1] ? "BULLISH" : emaF[1] < emaS[1] ? "BEARISH" : "NEUTRAL"
 
 sigTxt = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
          lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
 
-chkTrend = na(lastSigBar) ? "—" : (lastTrendOk ? "✓" : "✗")
-chkMom   = na(lastSigBar) ? "—" : (lastMomOk   ? "✓" : "✗")
-chkAdx   = na(lastSigBar) ? "—" : (lastAdxOk   ? "✓" : "✗")
-chkSlope = na(lastSigBar) ? "—" : (lastSlopeOk ? "✓" : "✗")
+confTM = na(lastSigBar) ? "— / —" : (lastTrendOk ? "✓" : "✗") + " / " + (lastMomOk ? "✓" : "✗")
+confAS = na(lastSigBar) ? "— / —" : (lastAdxOk   ? "✓" : "✗") + " / " + (lastSlopeOk ? "✓" : "✗")
 
 sigColor = lastSigType > 0 ? color.lime : lastSigType < 0 ? color.red : color.silver
+hdrColor = configOk ? color.silver : color.red
+hdrTxt   = configOk ? "MARKET" : "CONFIG ERROR"
 
 var table pan = na
 
 if showPanel
     if na(pan)
-        pan := table.new(position.top_right, 2, 14, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        pan := table.new(position.top_right, 2, 18, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Title
-    table.cell(pan, 0, 0, "MY INDICATOR", text_color = color.white,  text_size = size.small)
-    table.cell(pan, 1, 0, "",             text_color = color.white,  text_size = size.small)
+    table.cell(pan, 0, 0, "MY INDICATOR " + VERSION, text_color = color.white,  text_size = size.small)
+    table.cell(pan, 1, 0, "",                          text_color = color.white,  text_size = size.small)
     //--- Symbol / Timeframe
-    table.cell(pan, 0, 1, "Symbol",    text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 1, "Symbol",     text_color = color.silver, text_size = size.small)
     table.cell(pan, 1, 1, syminfo.ticker, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 2, "Timeframe", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 2, "Timeframe",  text_color = color.silver, text_size = size.small)
     table.cell(pan, 1, 2, timeframe.period, text_color = color.silver, text_size = size.small)
-    //--- Trend / Momentum / ADX / ATR
-    table.cell(pan, 0, 3, trendLbl, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 3, trendTxt + " " + chkTrend, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 4, "Momentum", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 4, momentumTxt + " " + chkMom, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 5, "ADX", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 5, str.tostring(adxVal[1], "#.##") + " " + chkAdx, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 6, "ATR", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 6, str.tostring(atrVal[1], "#.##"), text_color = color.silver, text_size = size.small)
-    //--- Score / Signal
-    table.cell(pan, 0, 7, "Score", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 7, str.tostring(lastScore) + "/" + str.tostring(lastMax), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 8, "Signal", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 8, sigTxt, text_color = sigColor, text_size = size.small)
-    //--- Levels of the latest confirmed signal
-    table.cell(pan, 0, 9,  "Entry", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 9,  na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 10, "SL", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 10, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 11, "TP1", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 11, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 12, "TP2", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 12, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.silver, text_size = size.small)
-    //--- Slope confirmation
-    table.cell(pan, 0, 13, "Slope", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 13, chkSlope, text_color = color.silver, text_size = size.small)
+    //--- MARKET section
+    table.cell(pan, 0, 3, hdrTxt, text_color = hdrColor, text_size = size.small)
+    table.cell(pan, 1, 3, "",    text_color = hdrColor, text_size = size.small)
+    table.cell(pan, 0, 4, trendLbl, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 4, trendTxt, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 5, "Momentum", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 5, momentumTxt, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 6, "ADX", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 6, str.tostring(adxVal[1], "#.##"), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 7, "ATR", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 7, str.tostring(atrVal[1], "#.##"), text_color = color.silver, text_size = size.small)
+    //--- LAST SIGNAL section
+    table.cell(pan, 0, 8, "LAST SIGNAL", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 8, "",            text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 9, "Signal", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 9, sigTxt, text_color = sigColor, text_size = size.small)
+    table.cell(pan, 0, 10, "Score", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 10, str.tostring(lastScore) + "/" + str.tostring(lastMax), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 11, "Entry", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 11, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 12, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 12, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 13, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 13, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 14, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 14, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.silver, text_size = size.small)
+    //--- Last signal component confirmations
+    table.cell(pan, 0, 15, "Trend / Momentum", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 15, confTM, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 16, "ADX / Slope", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 16, confAS, text_color = color.silver, text_size = size.small)
+    //--- Config warning (reason shown when inputs are inconsistent)
+    table.cell(pan, 0, 17, configOk ? "" : "Config", text_color = color.red, text_size = size.small)
+    table.cell(pan, 1, 17, configOk ? "" : cfgReason, text_color = color.red, text_size = size.small)
 else
     if not na(pan)
         table.delete(pan)

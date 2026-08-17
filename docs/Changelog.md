@@ -2,7 +2,17 @@
 
 All notable changes to MyBuySellIndicator.
 
-## v2.0.0 (current baseline) — TradingView multi-timeframe
+## v2.0.1 (hardening) — TradingView MTF confirmation + repaint safety
+
+Date: 2026-08-17
+
+- **HTF confirmation fix:** replaced the multi-line 4-tuple `request.security` with **four single-line calls**, one per H4 value (`h4e50H`, `h4e50PrevH`, `h4e200H`, `h4momH`), each with `lookahead = barmerge.lookahead_off`. Fixes the target Pine build's compiler error `Syntax error at input 'end of line without line continuation'`.
+- **Repaint proof documented:** each H4 value is step-constant during the forming H4 candle and only updates when an H4 candle completes; the slope baseline `[1]` is applied inside the H4 context (two consecutive closed H4 values). Comments and docs updated to state the exact semantics.
+- **Config validation:** signals are suppressed and the panel shows `CONFIG ERROR` + reason when an EMA Fast ≥ its Slow (H4 or entry), when all weights are 0, or when `MinimumScore > maxScore`. Weight inputs clamped ≥ 0.
+- **na-safe level redraw:** level-line/label deletion in the BUY/SELL blocks and in the `showLevels` toggle is guarded with `not na(...)`; toggling levels off now also nulls the stored ids — no risk of deleting non-existent objects.
+- **No trading-logic changes:** signal conditions, scoring defaults (25/25/25/25, min 75), ATR levels (1.5/1.5/3.0), H4 trend/slope rules, and STRONG thresholds are unchanged.
+
+## v2.0.0 — TradingView multi-timeframe
 
 Date: initial repository commit
 
