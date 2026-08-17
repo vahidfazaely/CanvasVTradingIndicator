@@ -1,6 +1,6 @@
 # Strategy — CanvasV MTF Signal
 
-This document describes the **current baseline** (TradingView `v2.0.1` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v2.1.0` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal. The v2.1.0 release changed presentation only — the logic described here is identical to v2.0.2.
 
 ---
 

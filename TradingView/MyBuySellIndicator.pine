@@ -4,6 +4,7 @@
 //|  Multi-timeframe version of the MT5 Phase 2 logic               |
 //|  v2.0.1 - hardening release (validation + repaint proof)        |
 //|  v2.0.2 - renamed to CanvasV MTF Signal (display name only)      |
+//|  v2.1.0 - visual/UI refinement (markers, panel, level labels)    |
 //|                                                                  |
 //|  ARCHITECTURE                                                    |
 //|   Trend filter : H4 EMA 50/200 + EMA 50 slope (closed H4 only)  |
@@ -30,7 +31,7 @@
 indicator("CanvasV MTF Signal", shorttitle = "CanvasV MTF", overlay = true, max_lines_count = 10, max_labels_count = 50)
 
 //--- Build version shown in the panel
-VERSION = "v2.0.2"
+VERSION = "v2.1.0"
 
 //--------------------------------------------------------------
 // Inputs (validated: no negative weights, no zero periods)
@@ -82,6 +83,7 @@ showH4EMAs   = input.bool(true, "Show H4 EMA 50/200",    group = grpVis)
 showEntryEMAs = input.bool(true, "Show Entry EMA 9/21",  group = grpVis)
 showMarkers  = input.bool(true, "Show BUY/SELL markers", group = grpVis)
 showLevels   = input.bool(true, "Show Entry/SL/TP1/TP2 lines", group = grpVis)
+showSigLabels = input.bool(true, "Show signal labels",          group = grpVis)
 
 showPanel = input.bool(true, "Show info panel", group = grpPanel)
 
@@ -226,10 +228,10 @@ plot(showEntryEMAs ? emaS   : na, "Entry EMA 21",color = color.new(color.fuchsia
 //--------------------------------------------------------------
 // Markers: BUY / STRONG BUY / SELL / STRONG SELL
 //--------------------------------------------------------------
-plotshape(showMarkers and buySig  and not strongBuy,  "BUY",         style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0),  size = size.small)
-plotshape(showMarkers and strongBuy,                  "STRONG BUY",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.aqua, 0),   size = size.normal)
-plotshape(showMarkers and sellSig and not strongSell, "SELL",        style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small)
-plotshape(showMarkers and strongSell,                 "STRONG SELL", style = shape.triangledown, location = location.abovebar, color = color.new(color.orange, 0),size = size.normal)
+plotshape(showMarkers and buySig  and not strongBuy,  "BUY",         style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.normal, textcolor = color.lime, text = showSigLabels ? "BUY " + str.tostring(buyScore) : na)
+plotshape(showMarkers and strongBuy,                  "STRONG BUY",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime, 0), size = size.large,  textcolor = color.lime, text = showSigLabels ? "STRONG BUY " + str.tostring(buyScore) : na)
+plotshape(showMarkers and sellSig and not strongSell, "SELL",        style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.normal, textcolor = color.red, text = showSigLabels ? "SELL " + str.tostring(sellScore) : na)
+plotshape(showMarkers and strongSell,                 "STRONG SELL", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.large,  textcolor = color.red, text = showSigLabels ? "STRONG SELL " + str.tostring(sellScore) : na)
 
 //--------------------------------------------------------------
 // Last-signal state (levels + panel)
@@ -245,10 +247,6 @@ var label lblTP2   = na
 var int   lastSigType = 0       // 2 STRONG BUY, 1 BUY, -1 SELL, -2 STRONG SELL, 0 none
 var int   lastScore   = 0
 var int   lastMax     = 0
-var bool  lastTrendOk = false
-var bool  lastMomOk   = false
-var bool  lastAdxOk   = false
-var bool  lastSlopeOk = false
 var float lastEntry   = na
 var float lastSL      = na
 var float lastTP1     = na
@@ -262,10 +260,6 @@ if buySig
     lastSigType := strongBuy ? 2 : 1
     lastScore   := buyScore
     lastMax     := maxScore
-    lastTrendOk := h4Bull
-    lastMomOk   := crossUp
-    lastAdxOk   := adxPass
-    lastSlopeOk := slopeUp
     lastEntry   := entry
     lastSL      := slBuy
     lastTP1     := tp1Buy
@@ -297,10 +291,10 @@ if buySig
         lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
         lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
 
-        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.tiny)
-        lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
-        lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
-        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.tiny)
+        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small, bgcolor = color.new(color.black, 70))
+        lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small, bgcolor = color.new(color.black, 70))
+        lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small, bgcolor = color.new(color.black, 70))
+        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small, bgcolor = color.new(color.black, 70))
 
 //--------------------------------------------------------------
 // On a new confirmed SELL / STRONG SELL: remember + redraw levels
@@ -309,10 +303,6 @@ if sellSig
     lastSigType := strongSell ? -2 : -1
     lastScore   := sellScore
     lastMax     := maxScore
-    lastTrendOk := h4Bear
-    lastMomOk   := crossDn
-    lastAdxOk   := adxPass
-    lastSlopeOk := slopeDn
     lastEntry   := entry
     lastSL      := slSell
     lastTP1     := tp1Sell
@@ -343,10 +333,10 @@ if sellSig
         lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
         lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
 
-        lblEntry := label.new(bar_index, entry,   "ENTRY " + str.tostring(entry,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.tiny)
-        lblSL    := label.new(bar_index, slSell,  "SL "    + str.tostring(slSell,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
-        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "   + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
-        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "   + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.tiny)
+        lblEntry := label.new(bar_index, entry,   "ENTRY " + str.tostring(entry,   format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small, bgcolor = color.new(color.black, 70))
+        lblSL    := label.new(bar_index, slSell,  "SL "    + str.tostring(slSell,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small, bgcolor = color.new(color.black, 70))
+        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "   + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small, bgcolor = color.new(color.black, 70))
+        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "   + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small, bgcolor = color.new(color.black, 70))
 
 //--------------------------------------------------------------
 // Live toggle of the level lines (showLevels changed)
@@ -388,10 +378,10 @@ else if showLevels != prevShowLevels
             lnTP1   := line.new(lastSigBar, lastTP1,    lastSigBar, lastTP1,    extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
             lnTP2   := line.new(lastSigBar, lastTP2,    lastSigBar, lastTP2,    extend = extend.right, color = color.new(color.teal, 0),  style = line.style_dotted, width = 1)
 
-            lblEntry := label.new(lastSigBar, lastEntry,  "ENTRY " + str.tostring(lastEntry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.tiny)
-            lblSL    := label.new(lastSigBar, lastSL,     "SL "    + str.tostring(lastSL,     format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
-            lblTP1   := label.new(lastSigBar, lastTP1,    "TP1 "   + str.tostring(lastTP1,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
-            lblTP2   := label.new(lastSigBar, lastTP2,    "TP2 "   + str.tostring(lastTP2,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.tiny)
+            lblEntry := label.new(lastSigBar, lastEntry,  "ENTRY " + str.tostring(lastEntry,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.blue,  size = size.small, bgcolor = color.new(color.black, 70))
+            lblSL    := label.new(lastSigBar, lastSL,     "SL "    + str.tostring(lastSL,     format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small, bgcolor = color.new(color.black, 70))
+            lblTP1   := label.new(lastSigBar, lastTP1,    "TP1 "   + str.tostring(lastTP1,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small, bgcolor = color.new(color.black, 70))
+            lblTP2   := label.new(lastSigBar, lastTP2,    "TP2 "   + str.tostring(lastTP2,    format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.teal,  size = size.small, bgcolor = color.new(color.black, 70))
 
 //--------------------------------------------------------------
 // Alerts (once per confirmed signal, live bars only)
@@ -433,68 +423,53 @@ alertcondition(sellSig and not strongSell, title = "CanvasV SELL",        messag
 panelE50  = isH4plus ? h4e50[1]  : h4e50
 panelE200 = isH4plus ? h4e200[1] : h4e200
 
-trendLbl    = isH4plus ? "Trend (chart TF)" : "H4 Trend"
+trendLbl    = isH4plus ? "TREND (TF)" : "H4 TREND"
 trendTxt    = panelE50 > panelE200 ? "BULLISH" : panelE50 < panelE200 ? "BEARISH" : "NEUTRAL"
 momentumTxt = emaF[1] > emaS[1] ? "BULLISH" : emaF[1] < emaS[1] ? "BEARISH" : "NEUTRAL"
 
 sigTxt = lastSigType == 2 ? "STRONG BUY" : lastSigType == 1 ? "BUY" :
          lastSigType == -1 ? "SELL" : lastSigType == -2 ? "STRONG SELL" : "NONE"
 
-confTM = na(lastSigBar) ? "— / —" : (lastTrendOk ? "✓" : "✗") + " / " + (lastMomOk ? "✓" : "✗")
-confAS = na(lastSigBar) ? "— / —" : (lastAdxOk   ? "✓" : "✗") + " / " + (lastSlopeOk ? "✓" : "✗")
-
-sigColor = lastSigType > 0 ? color.lime : lastSigType < 0 ? color.red : color.silver
-hdrColor = configOk ? color.silver : color.red
-hdrTxt   = configOk ? "MARKET" : "CONFIG ERROR"
+sigColor   = lastSigType > 0 ? color.lime : lastSigType < 0 ? color.red : color.silver
+trendColor = trendTxt == "BULLISH" ? color.lime : trendTxt == "BEARISH" ? color.red : color.silver
+momColor   = momentumTxt == "BULLISH" ? color.lime : momentumTxt == "BEARISH" ? color.red : color.silver
 
 var table pan = na
 
 if showPanel
     if na(pan)
-        pan := table.new(position.top_right, 2, 18, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+        pan := table.new(position.top_right, 2, 13, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
 
     //--- Title
-    table.cell(pan, 0, 0, "CANVASV MTF SIGNAL " + VERSION, text_color = color.white,  text_size = size.small)
-    table.cell(pan, 1, 0, "",                          text_color = color.white,  text_size = size.small)
-    //--- Symbol / Timeframe
-    table.cell(pan, 0, 1, "Symbol",     text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 1, syminfo.ticker, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 2, "Timeframe",  text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 2, timeframe.period, text_color = color.silver, text_size = size.small)
-    //--- MARKET section
-    table.cell(pan, 0, 3, hdrTxt, text_color = hdrColor, text_size = size.small)
-    table.cell(pan, 1, 3, "",    text_color = hdrColor, text_size = size.small)
-    table.cell(pan, 0, 4, trendLbl, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 4, trendTxt, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 5, "Momentum", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 5, momentumTxt, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 6, "ADX", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 6, str.tostring(adxVal[1], "#.##"), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 7, "ATR", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 7, str.tostring(atrVal[1], "#.##"), text_color = color.silver, text_size = size.small)
-    //--- LAST SIGNAL section
-    table.cell(pan, 0, 8, "LAST SIGNAL", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 8, "",            text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 9, "Signal", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 9, sigTxt, text_color = sigColor, text_size = size.small)
-    table.cell(pan, 0, 10, "Score", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 10, str.tostring(lastScore) + "/" + str.tostring(lastMax), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 11, "Entry", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 11, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 12, "SL", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 12, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 13, "TP1", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 13, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 14, "TP2", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 14, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.silver, text_size = size.small)
-    //--- Last signal component confirmations
-    table.cell(pan, 0, 15, "Trend / Momentum", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 15, confTM, text_color = color.silver, text_size = size.small)
-    table.cell(pan, 0, 16, "ADX / Slope", text_color = color.silver, text_size = size.small)
-    table.cell(pan, 1, 16, confAS, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 0, "CANVASV MTF SIGNAL", text_color = color.white,  text_size = size.normal)
+    table.cell(pan, 1, 0, VERSION,              text_color = color.silver, text_size = size.small)
+    //--- MARKET
+    table.cell(pan, 0, 1, "— MARKET —", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 1, "",           text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 2, trendLbl, text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 2, trendTxt, text_color = trendColor,   text_size = size.normal)
+    table.cell(pan, 0, 3, "MOMENTUM", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 3, momentumTxt, text_color = momColor,   text_size = size.normal)
+    table.cell(pan, 0, 4, "ADX", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 4, str.tostring(adxVal[1], "#.##"), text_color = color.silver, text_size = size.normal)
+    //--- LAST SIGNAL
+    table.cell(pan, 0, 5, "— LAST SIGNAL —", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 5, "",               text_color = color.silver, text_size = size.small)
+    table.cell(pan, 0, 6, "SIGNAL", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 6, sigTxt,   text_color = sigColor,     text_size = size.large)
+    table.cell(pan, 0, 7, "SCORE", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 7, na(lastSigBar) ? "—" : str.tostring(lastScore) + "/" + str.tostring(lastMax), text_color = color.silver, text_size = size.normal)
+    table.cell(pan, 0, 8, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 8, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
+    table.cell(pan, 0, 9, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 9, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
+    table.cell(pan, 0, 10, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 10, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = color.green, text_size = size.normal)
+    table.cell(pan, 0, 11, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(pan, 1, 11, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = color.teal, text_size = size.normal)
     //--- Config warning (reason shown when inputs are inconsistent)
-    table.cell(pan, 0, 17, configOk ? "" : "Config", text_color = color.red, text_size = size.small)
-    table.cell(pan, 1, 17, configOk ? "" : cfgReason, text_color = color.red, text_size = size.small)
+    table.cell(pan, 0, 12, configOk ? "" : "CONFIG", text_color = color.red, text_size = size.small)
+    table.cell(pan, 1, 12, configOk ? "" : cfgReason, text_color = color.red, text_size = size.small)
 else
     if not na(pan)
         table.delete(pan)

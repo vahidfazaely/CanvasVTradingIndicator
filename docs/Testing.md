@@ -78,6 +78,7 @@ Each of these must hide/show the corresponding element immediately:
 - `Show H4 EMA 50/200`
 - `Show Entry EMA 9/21`
 - `Show BUY/SELL markers`
+- `Show signal labels` (hides the direction + score text on markers, keeps the markers)
 - `Show Entry/SL/TP1/TP2 lines`
 - `Show info panel`
 
