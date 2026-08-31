@@ -1,0 +1,12 @@
+04:24:12 pine: ../TradingView/CanvasV_V4_FAST.pine (47659 chars), symbol: BINANCE:BTCUSDT, tf: 15
+04:24:12 browser launched
+04:25:16 navigated: https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT&interval=15
+04:25:16 chart ready: true
+04:25:16 header: {"symbol":"SPX","interval":"","title":"BTCUSDT 78,830.55 ▼ −0.24%"}
+04:25:16 pine dialog opened (attempt 1)
+04:25:20 monaco editor visible
+04:29:46 code inserted via CDP
+04:29:46 editor state: {"visibleLen":128307,"head":"                                                                                                    ","btnText":"Add to chartAdd to chart","btnDisabled":false}
+04:29:47 Add to chart visible: true
+04:29:59 FATAL: locator.click: Timeout 12000ms exceeded.
+04:29:59 browser closed

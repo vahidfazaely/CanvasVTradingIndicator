@@ -1,0 +1,20 @@
+05:02:31 loading ../TradingView/CanvasV_V4_FAST.pine (47659 chars)
+05:02:31 browser launched with memory flags
+05:02:36 chart ready: true
+05:02:36 pine dialog opened
+05:02:41 monaco visible
+05:02:43 editor cleared
+05:02:43 inserting text (~90s)...
+05:04:18 insertText completed in 95513ms
+05:04:18 waiting 60s for Monaco to process...
+05:07:00 wait complete
+05:07:00 editor content length: 128307
+05:07:00 Add to chart visible: true
+05:07:00 Add to chart clicked
+05:07:16 NO COMPILE ERRORS
+05:07:16 legend entries: 0
+05:07:16 tables: 2
+05:07:16   table: 
+05:07:16   table: 8:32:39 AM"Untitled script" opened
+05:07:16 SUCCESS
+05:07:16 closed

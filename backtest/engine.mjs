@@ -26,7 +26,8 @@ export const DEFAULT_PARAMS = {
   pullbackLookback: 5,
   pullbackTolPct: 0.5,
   breakoutBars: 10,
-  maxExtAtr: 2.5,
+  maxExtAtr: 1.5,
+  useStrictExt: true,
   minBodyPct: 0.0,
 
   // Risk
@@ -37,8 +38,12 @@ export const DEFAULT_PARAMS = {
   tp1R: 1.0,
   tp2R: 2.5,
   atrFallbackMult: 1.5,
+  atrStopMult: 0.0,
 
   // Position
+  enableMidTradeBE: false,
+  beBarThreshold: 10,
+  staleBarLimit: 15,
   outcomeBars: 20,
 };
 
@@ -237,8 +242,12 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
 
     const extAtrUp = (c.close - emaDir[i]) / Math.max(atrVal, 1e-10);
     const extAtrDn = (emaDir[i] - c.close) / Math.max(atrVal, 1e-10);
-    const extOkUp = extAtrUp <= p.maxExtAtr;
-    const extOkDn = extAtrDn <= p.maxExtAtr;
+    const extOkUp = p.useStrictExt ? extAtrUp <= p.maxExtAtr : true;
+    const extOkDn = p.useStrictExt ? extAtrDn <= p.maxExtAtr : true;
+
+    // Pullback momentum gate: disallow BUY if close < emaTrig, disallow SELL if close > emaTrig
+    const pbMomOkUp = pullbackUp ? c.close >= emaTrig[i] : true;
+    const pbMomOkDn = pullbackDn ? c.close <= emaTrig[i] : true;
 
     // ─── Risk validation ───
     const entry = c.close;
@@ -250,18 +259,22 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
     const structSLBuy = sl - atrVal * p.structBufferAtr;
     const structSLSell = sh + atrVal * p.structBufferAtr;
 
-    const riskStructBuy = entry - structSLBuy;
+    // Apply volatility buffer: SL = structural + atrStopMult × ATR
+    const slBuyRaw = structSLBuy - atrVal * p.atrStopMult;
+    const slSellRaw = structSLSell + atrVal * p.atrStopMult;
+
+    const riskStructBuy = entry - slBuyRaw;
     const slModeBuy = riskStructBuy >= p.minRiskAtr * atrVal;
-    const slBuy = slModeBuy ? structSLBuy : entry - p.atrFallbackMult * atrVal;
+    const slBuy = slModeBuy ? slBuyRaw : entry - p.atrFallbackMult * atrVal;
     const riskBuy = entry - slBuy;
     const riskAtrBuy = riskBuy / Math.max(atrVal, 1e-10);
     const riskGateBuyOk = atrUsable && slBuy < entry && riskAtrBuy <= p.maxRiskAtr;
     const tp1Buy = entry + riskBuy * p.tp1R;
     const tp2Buy = entry + riskBuy * p.tp2R;
 
-    const riskStructSell = structSLSell - entry;
+    const riskStructSell = slSellRaw - entry;
     const slModeSell = riskStructSell >= p.minRiskAtr * atrVal;
-    const slSell = slModeSell ? structSLSell : entry + p.atrFallbackMult * atrVal;
+    const slSell = slModeSell ? slSellRaw : entry + p.atrFallbackMult * atrVal;
     const riskSell = slSell - entry;
     const riskAtrSell = riskSell / Math.max(atrVal, 1e-10);
     const riskGateSellOk = atrUsable && slSell > entry && riskAtrSell <= p.maxRiskAtr;
@@ -286,12 +299,36 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
       let outcome = null;
       let finalR = 0;
 
-      if (slHit && (tp1Hit || tp2Hit)) {
+      // Mid-trade break-even: after beBarThreshold bars, if profit >= +0.25R, move SL to entry
+      if (p.enableMidTradeBE && posAge >= p.beBarThreshold && !slHit && !tp1Hit && !tp2Hit) {
+        const midCurR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
+        if (midCurR >= 0.25) {
+          posSL = posEntry; // Move to break-even
+        }
+      }
+
+      // Re-check SL with updated posSL
+      const slHitUpdated = posState === 1 ? c.low <= posSL : c.high >= posSL;
+
+      // Stale trade exit: if flat after staleBarLimit bars, exit at market
+      let staleExit = false;
+      if (posAge >= p.staleBarLimit && !slHit && !tp1Hit && !tp2Hit) {
+        const staleR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
+        if (staleR > -0.25 && staleR < 0.25) {
+          staleExit = true;
+        }
+      }
+
+      if (staleExit) {
+        outcome = "STALE_EXIT";
+        finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
+      } else if (slHitUpdated && (tp1Hit || tp2Hit)) {
         outcome = "AMBIGUOUS";
         finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
-      } else if (slHit) {
+      } else if (slHitUpdated) {
         outcome = "SL FIRST";
-        finalR = -1.0;
+        // If SL was moved to entry (break-even), R = 0, otherwise -1.0
+        finalR = Math.abs(posSL - posEntry) < 0.01 ? 0.0 : -1.0;
       } else if (tp2Hit) {
         outcome = "TP2 FIRST";
         finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
@@ -343,8 +380,8 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
     const canEnterLong = posState === 0 || posState === -1;
     const canEnterShort = posState === 0 || posState === 1;
 
-    const entryUp = cfgOk && setupUp && triggerUp && extOkUp && bodyOkUp && riskGateBuyOk && canEnterLong;
-    const entryDn = cfgOk && setupDn && triggerDn && extOkDn && bodyOkDn && riskGateSellOk && canEnterShort;
+    const entryUp = cfgOk && setupUp && triggerUp && extOkUp && pbMomOkUp && bodyOkUp && riskGateBuyOk && canEnterLong;
+    const entryDn = cfgOk && setupDn && triggerDn && extOkDn && pbMomOkDn && bodyOkDn && riskGateSellOk && canEnterShort;
 
     if (entryUp) {
       // Supersede opposite position

@@ -1,0 +1,17 @@
+05:19:24 loading ../TradingView/CanvasV_V4_BACKTEST.pine (10033 chars)
+05:19:25 browser launched
+05:19:29 chart ready: true
+05:19:31 pine dialog opened
+05:19:40 monaco visible
+05:19:40 textarea visible: true
+05:19:40 filling editor (10033 chars)...
+05:19:46 fill completed in 5865ms
+05:20:22 editor content length: 7142
+05:20:23 Add to chart visible: true
+05:20:23 Add to chart clicked
+05:20:38 NO COMPILE ERRORS
+05:20:38 legend entries: 0
+05:20:38 opening Strategy Tester...
+05:20:38 Strategy Tester button not visible
+05:20:38 SUCCESS - backtest loaded and tested
+05:20:38 closed

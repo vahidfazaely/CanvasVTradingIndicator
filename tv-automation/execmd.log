@@ -1,0 +1,10 @@
+04:34:51 loading ../TradingView/CanvasV_V4_FAST.pine (47659 chars)
+04:34:52 browser launched
+04:34:57 chart ready: true
+04:34:58 pine dialog opened
+04:35:08 monaco visible
+04:36:40 execCommand insertText completed in 91039ms
+04:40:12 editor content length: 128307
+04:40:13 Add to chart visible: true
+04:40:28 FATAL: locator.click: Timeout 15000ms exceeded.
+04:40:28 closed

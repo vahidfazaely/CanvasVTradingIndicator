@@ -48,7 +48,8 @@ enableBreakout    = input.bool(true, "Enable breakout trigger", group = grpTgr)
 pullbackLookback  = input.int(5,    "Pullback lookback (bars)", minval = 2, group = grpTgr)
 pullbackTolPct    = input.float(0.5, "Pullback touch tolerance (%)", minval = 0, group = grpTgr)
 breakoutBars      = input.int(10,   "Breakout lookback (bars)", minval = 3, group = grpTgr)
-maxExtAtr         = input.float(2.5, "Max entry extension (ATR from direction EMA)", minval = 0.1, group = grpTgr, tooltip = "Extension guard: |close - direction EMA| / ATR must be <= this.")
+maxExtAtr         = input.float(1.5, "Max entry extension (ATR from direction EMA)", minval = 0.1, group = grpTgr, tooltip = "Extension guard: |close - direction EMA| / ATR must be <= this.")
+useStrictExt      = input.bool(true, "Use strict extension filter", group = grpTgr, tooltip = "When true, entries are rejected if price is further than maxExtAtr from EMA21.")
 minBodyPct        = input.float(0.0, "Min candle body (%) (0 = off)", minval = 0, maxval = 100, group = grpTgr)
 
 //--- Risk
@@ -59,10 +60,14 @@ maxRiskAtr      = input.float(2.5, "Maximum risk (ATR)", minval = 0.01, group = 
 tp1R            = input.float(1.0, "TP1 R multiple", minval = 0.01, group = grpRisk)
 tp2R            = input.float(2.5, "TP2 R multiple", minval = 0.01, group = grpRisk)
 atrFallbackMult = 1.5     // fixed ATR fallback for too-tight/invalid structure
+atrStopMult     = input.float(0.0, "Dynamic ATR stop buffer (ATR)", minval = 0.0, step = 0.1, group = grpRisk, tooltip = "Additional ATR buffer added beyond structural SL. Default 0 = original behavior. Increase to widen SL. Total SL = structural + atrVal × this. Combined with structBufferAtr (0.5), total SL buffer = (0.5 + atrStopMult) × ATR from swing.")
 
 //--- Execution (Phase 3)
 enablePartialTP = input.bool(false, "Enable Partial Take-Profit (50/50 split)", group = grpExec, tooltip = "Exit 50% at TP1, let remaining 50% run to TP2.")
 enableMoveBE    = input.bool(false, "Enable Break-Even Adjustment", group = grpExec, tooltip = "After TP1 fills, move SL to entry for the remaining unit.")
+enableMidTradeBE = input.bool(false, "Enable Mid-Trade Break-Even", group = grpExec, tooltip = "After beBarThreshold bars, if profit >= +0.25R, move SL to entry.")
+beBarThreshold  = input.int(10, "Break-Even bar threshold", minval = 2, group = grpExec, tooltip = "Bars held before mid-trade BE activates.")
+staleBarLimit   = input.int(15, "Stale trade exit (bars)", minval = 5, group = grpExec, tooltip = "If position is flat (-0.25R to +0.25R) after this many bars, exit at market.")
 outcomeBars     = input.int(20, "Position expiry (bars)", minval = 2, group = grpExec)
 
 //--- Session filter (Phase 3)
@@ -143,8 +148,12 @@ bodyOkDn = minBodyPct <= 0 or (close < open and bodyPct >= minBodyPct)
 
 extAtrUp = (close - emaDir) / math.max(atrVal, 1e-10)
 extAtrDn = (emaDir - close) / math.max(atrVal, 1e-10)
-extOkUp  = extAtrUp <= maxExtAtr
-extOkDn  = extAtrDn <= maxExtAtr
+extOkUp  = useStrictExt ? extAtrUp <= maxExtAtr : true
+extOkDn  = useStrictExt ? extAtrDn <= maxExtAtr : true
+
+//--- Pullback momentum gate: disallow BUY if close < emaTrig, disallow SELL if close > emaTrig
+pbMomOkUp = pullbackUp ? close >= emaTrig : true
+pbMomOkDn = pullbackDn ? close <= emaTrig : true
 
 //--------------------------------------------------------------
 // Risk validation (structural model)
@@ -153,21 +162,27 @@ entry = close
 atrUsable = not na(atrVal) and atrVal > 0
 swingLow  = ta.lowest(low, swingLookback)[1]
 swingHigh = ta.highest(high, swingLookback)[1]
+//--- Structural SL + dynamic ATR buffer
 structSLBuy  = swingLow  - atrVal * structBufferAtr
 structSLSell = swingHigh + atrVal * structBufferAtr
 
-riskStructBuy = entry - structSLBuy
+//--- Apply volatility buffer: SL = structural + atrStopMult × ATR
+slBuyRaw     = structSLBuy  - atrVal * atrStopMult
+slSellRaw    = structSLSell + atrVal * atrStopMult
+
+//--- Risk validation (structural mode check)
+riskStructBuy = entry - slBuyRaw
 slModeBuy     = riskStructBuy >= minRiskAtr * atrVal
-slBuy         = slModeBuy ? structSLBuy : entry - atrFallbackMult * atrVal
+slBuy         = slModeBuy ? slBuyRaw : entry - atrFallbackMult * atrVal
 riskBuy       = entry - slBuy
 riskAtrBuy    = riskBuy / math.max(atrVal, 1e-10)
 riskGateBuyOk = atrUsable and slBuy < entry and riskAtrBuy <= maxRiskAtr
 tp1Buy        = entry + riskBuy * tp1R
 tp2Buy        = entry + riskBuy * tp2R
 
-riskStructSell = structSLSell - entry
+riskStructSell = slSellRaw - entry
 slModeSell     = riskStructSell >= minRiskAtr * atrVal
-slSell         = slModeSell ? structSLSell : entry + atrFallbackMult * atrVal
+slSell         = slModeSell ? slSellRaw : entry + atrFallbackMult * atrVal
 riskSell       = slSell - entry
 riskAtrSell    = riskSell / math.max(atrVal, 1e-10)
 riskGateSellOk = atrUsable and slSell > entry and riskAtrSell <= maxRiskAtr
@@ -281,11 +296,11 @@ candDn = isConfirmed and cfgOk and setupDn and triggerDn
 canEnterLong  = true
 canEnterShort = true
 
-candReasonUp = not extOkUp ? "ENTRY TOO EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
-candReasonDn = not extOkDn ? "ENTRY TOO EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+candReasonUp = not extOkUp ? "REJECT: EXTENDED" : not pbMomOkUp ? "REJECT: PB MOM" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+candReasonDn = not extOkDn ? "REJECT: EXTENDED" : not pbMomOkDn ? "REJECT: PB MOM" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
 
-entryUp = candUp and extOkUp and bodyOkUp and riskGateBuyOk and inSession
-entryDn = candDn and extOkDn and bodyOkDn and riskGateSellOk and inSession
+entryUp = candUp and extOkUp and pbMomOkUp and bodyOkUp and riskGateBuyOk and inSession
+entryDn = candDn and extOkDn and pbMomOkDn and bodyOkDn and riskGateSellOk and inSession
 
 trigUpTxt = pullbackUp ? "PULLBACK RESUME" : "BREAKOUT"
 trigDnTxt = pullbackDn ? "PULLBACK RESUME" : "BREAKOUT"
@@ -458,6 +473,11 @@ if strategy.position_size > 0
         stratTp1Filled := true
     if enableMoveBE and stratTp1Filled
         exitSL := strategy.position_avg_price
+    //--- Mid-trade break-even: after beBarThreshold bars, if profit >= +0.25R, move SL to entry
+    if enableMidTradeBE and not stratTp1Filled
+        midCurR = (close - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
+        if stratAge >= beBarThreshold and midCurR >= 0.25
+            exitSL := strategy.position_avg_price
     if enablePartialTP
         strategy.exit("L-TP1", "Long", limit = stratTP1, stop = exitSL, qty_percent = 50)
         strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 100)
@@ -470,6 +490,11 @@ if strategy.position_size > 0
     longMAE = (strategy.position_avg_price - low) / math.max(stratRisk, 1e-10)
     stratMFE := math.max(stratMFE, longMFE)
     stratMAE := math.max(stratMAE, longMAE)
+    //--- Stale trade exit: if flat after staleBarLimit bars, exit at market
+    if stratAge >= staleBarLimit and strategy.position_size > 0
+        staleR = (close - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
+        if staleR > -0.25 and staleR < 0.25
+            strategy.close("Long", comment = "STALE_EXIT")
     //--- Expiry exit
     if stratAge >= outcomeBars and strategy.position_size > 0
         strategy.close("Long", comment = "EXPIRED")
@@ -481,6 +506,11 @@ if strategy.position_size < 0
         stratTp1Filled := true
     if enableMoveBE and stratTp1Filled
         exitSL := strategy.position_avg_price
+    //--- Mid-trade break-even: after beBarThreshold bars, if profit >= +0.25R, move SL to entry
+    if enableMidTradeBE and not stratTp1Filled
+        midCurR = (strategy.position_avg_price - close) / math.max(stratRisk, 1e-10)
+        if stratAge >= beBarThreshold and midCurR >= 0.25
+            exitSL := strategy.position_avg_price
     if enablePartialTP
         strategy.exit("S-TP1", "Short", limit = stratTP1, stop = exitSL, qty_percent = 50)
         strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 100)
@@ -493,6 +523,11 @@ if strategy.position_size < 0
     shortMAE = (high - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
     stratMFE := math.max(stratMFE, shortMFE)
     stratMAE := math.max(stratMAE, shortMAE)
+    //--- Stale trade exit: if flat after staleBarLimit bars, exit at market
+    if stratAge >= staleBarLimit and strategy.position_size < 0
+        staleR = (strategy.position_avg_price - close) / math.max(stratRisk, 1e-10)
+        if staleR > -0.25 and staleR < 0.25
+            strategy.close("Short", comment = "STALE_EXIT")
     //--- Expiry exit
     if stratAge >= outcomeBars and strategy.position_size < 0
         strategy.close("Short", comment = "EXPIRED")

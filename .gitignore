@@ -1,15 +1,25 @@
-# Workspace / editor data
-.freebuff/
+# Generated output (can be regenerated with: node backtest/run.mjs)
+backtest/engine/output/*.json
+backtest/engine/output/*.html
+backtest/engine/output/*.csv
+backtest/engine/output/*.txt
 
-# Compiled MT5 artifacts (source lives in MT5/ only)
-*.ex5
-*.ex4
+# Chrome profiles (TV automation)
+tv-automation/.chrome-profile*/
+tv-automation/.chrome-profile*/
 
-# Logs
-*.log
-# Collected CVLOG/CVOUT data (runtime artifact, not source)
-logs/cvlog.txt
+# Node modules
+tv-automation/node_modules/
+backtest/node_modules/
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
