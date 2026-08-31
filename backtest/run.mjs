@@ -6,7 +6,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runEngine, analyzeSLFailures, generateReport } from "./engine.mjs";
-import { generateViewer } from "./viewer.mjs";
 
 const args = process.argv.slice(2);
 const getArg = (name, def) => {
