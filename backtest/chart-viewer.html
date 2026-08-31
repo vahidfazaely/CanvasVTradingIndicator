@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CanvasV V4 FAST — Interactive Chart</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1118; color: #d1d4dc; overflow: hidden; height: 100vh; }
+
+/* Header */
+.header { background: #1e222d; padding: 10px 20px; border-bottom: 1px solid #2a2e39; display: flex; align-items: center; justify-content: space-between; height: 52px; }
+.header-left { display: flex; align-items: center; gap: 16px; }
+.header h1 { font-size: 16px; color: #fff; font-weight: 600; }
+.header .version { font-size: 11px; color: #787b86; background: #2a2e39; padding: 2px 8px; border-radius: 4px; }
+.symbol { font-size: 14px; color: #fff; font-weight: 700; }
+.tf { font-size: 12px; color: #787b86; margin-left: 4px; }
+.header-stats { display: flex; gap: 20px; font-size: 12px; }
+.header-stats .stat { color: #787b86; }
+.header-stats .val { color: #d1d4dc; font-weight: 600; margin-left: 4px; }
+.header-stats .val.pos { color: #26a69a; }
+.header-stats .val.neg { color: #ef5350; }
+
+/* Layout */
+.main { display: flex; height: calc(100vh - 52px); }
+.chart-wrap { flex: 1; position: relative; }
+#chart { width: 100%; height: 100%; }
+
+/* Sidebar */
+.sidebar { width: 300px; background: #1e222d; border-left: 1px solid #2a2e39; display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-section { padding: 12px 16px; border-bottom: 1px solid #2a2e39; }
+.sidebar-section h3 { font-size: 12px; color: #787b86; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.sidebar-section .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
+.sidebar-section .lbl { color: #787b86; }
+.sidebar-section .val { color: #d1d4dc; font-weight: 500; }
+.sidebar-section .val.pos { color: #26a69a; }
+.sidebar-section .val.neg { color: #ef5350; }
+
+/* Trade list */
+.trade-list-wrap { flex: 1; overflow-y: auto; padding: 0; }
+.trade-item { padding: 10px 16px; border-bottom: 1px solid #2a2e39; cursor: pointer; transition: background 0.15s; }
+.trade-item:hover { background: #2a3040; }
+.trade-item.selected { background: #2962ff22; border-left: 3px solid #2962ff; }
+.trade-item .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.trade-item .dir { font-weight: 700; font-size: 13px; }
+.trade-item .dir.buy { color: #26a69a; }
+.trade-item .dir.sell { color: #ef5350; }
+.trade-item .result { font-size: 12px; font-weight: 600; }
+.trade-item .result.win { color: #26a69a; }
+.trade-item .result.loss { color: #ef5350; }
+.trade-item .result.exp { color: #787b86; }
+.trade-item .meta { font-size: 11px; color: #787b86; }
+.trade-item .meta span { margin-right: 10px; }
+
+/* Trade detail */
+.trade-detail { padding: 12px 16px; background: #131722; border-top: 1px solid #2a2e39; min-height: 180px; max-height: 220px; overflow-y: auto; }
+.trade-detail h3 { font-size: 13px; color: #fff; margin-bottom: 8px; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 12px; }
+.detail-grid .lbl { color: #787b86; }
+.detail-grid .val { color: #d1d4dc; }
+.detail-grid .val.pos { color: #26a69a; }
+.detail-grid .val.neg { color: #ef5350; }
+
+/* Crosshair info */
+.crosshair-info { position: absolute; top: 8px; left: 12px; background: #1e222d; padding: 6px 12px; border-radius: 4px; font-size: 11px; z-index: 10; pointer-events: none; border: 1px solid #2a2e39; }
+.crosshair-info .ohlc { display: flex; gap: 12px; }
+.crosshair-info .ohlc span { color: #787b86; }
+.crosshair-info .ohlc .v { color: #d1d4dc; font-weight: 500; }
+
+/* Filter bar */
+.filter-bar { padding: 8px 16px; background: #1e222d; border-bottom: 1px solid #2a2e39; display: flex; gap: 6px; }
+.filter-btn { background: #2a2e39; color: #787b86; border: none; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+.filter-btn:hover { background: #363a45; color: #d1d4dc; }
+.filter-btn.active { background: #2962ff; color: #fff; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #1e222d; }
+::-webkit-scrollbar-thumb { background: #363a45; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #43464f; }
+
+/* Loading */
+.loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 14px; color: #787b86; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>CanvasV V4 FAST</h1>
+    <span class="version">v5.0.0</span>
+    <span class="symbol">BTCUSDT</span>
+    <span class="tf">15M</span>
+  </div>
+  <div class="header-stats" id="headerStats"></div>
+</div>
+
+<div class="main">
+  <div class="chart-wrap">
+    <div class="crosshair-info" id="crosshairInfo" style="display:none">
+      <div class="ohlc">
+        <span>O <span class="v" id="chO">—</span></span>
+        <span>H <span class="v" id="chH">—</span></span>
+        <span>L <span class="v" id="chL">—</span></span>
+        <span>C <span class="v" id="chC">—</span></span>
+        <span>Vol <span class="v" id="chV">—</span></span>
+      </div>
+    </div>
+    <div id="chart"></div>
+  </div>
+  <div class="sidebar">
+    <div class="filter-bar">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="BUY">BUY</button>
+      <button class="filter-btn" data-filter="SELL">SELL</button>
+      <button class="filter-btn" data-filter="WIN">Winners</button>
+      <button class="filter-btn" data-filter="LOSS">Losers</button>
+    </div>
+    <div class="sidebar-section" id="summarySection"></div>
+    <div class="trade-list-wrap" id="tradeList"></div>
+    <div class="trade-detail" id="tradeDetail">
+      <h3 style="color:#787b86">← Select a trade to see details</h3>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// DATA INJECTION — populated by run script or embedded
+// ============================================================
+let TRADES = [];
+let CANDLES = [];
+let STATS = {};
+let RAW_REPORT = {};
+
+// ============================================================
+// Try to load data from embedded JSON or fetch
+// ============================================================
+async function loadData() {
+  // Try embedded data first
+  if (window.__DATA__) {
+    TRADES = window.__DATA__.trades || [];
+    CANDLES = window.__DATA__.candles || [];
+    STATS = window.__DATA__.stats || {};
+    RAW_REPORT = window.__DATA__.report || {};
+    return;
+  }
+  // Try fetching from output directory
+  const paths = [
+    './engine/output/BTCUSDT-15m-results.json',
+    './BTCUSDT-15m-results.json',
+    './engine/output/chart-data.json',
+  ];
+  for (const p of paths) {
+    try {
+      const r = await fetch(p);
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (d.candles && d.trades) {
+        // Map from engine output format
+        CANDLES = d.candles.map(c => ({
+          time: c.timestamp || c.time,
+          open: c.open, high: c.high, low: c.low, close: c.close,
+          volume: c.volume || 0,
+        }));
+        TRADES = d.trades.map(t => ({
+          direction: t.direction,
+          entry: t.entry,
+          sl: t.sl,
+          tp1: t.tp1,
+          tp2: t.tp2,
+          risk: t.risk,
+          riskAtr: t.riskAtr,
+          exitPrice: t.exitPrice,
+          exit: t.exitReason || t.exit,
+          r: t.finalR || t.r,
+          mfe: t.mfe,
+          mae: t.mae,
+          bars: t.age || t.bars,
+          entryTime: t.entryTime,
+          exitTime: t.exitTime,
+          entryBar: t.entryBar,
+          trigger: t.trigger || '',
+          regime: t.regime || '',
+          extAtr: t.extAtr || 0,
+          bodyPct: t.bodyPct || 0,
+        }));
+        RAW_REPORT = d.report || {};
+        console.log(`Loaded ${CANDLES.length} candles, ${TRADES.length} trades from ${p}`);
+        return;
+      }
+      if (d.stats) {
+        TRADES = d.trades || [];
+        CANDLES = d.candles || [];
+        STATS = d.stats;
+        return;
+      }
+    } catch(e) { /* try next */ }
+  }
+  document.body.innerHTML = '<div style="padding:40px;color:#ef5350">Failed to load data. Run: <code>node backtest/run.mjs</code></div>';
+}
+
+// ============================================================
+// CHART SETUP
+// ============================================================
+let chart, candleSeries, volumeSeries, emaSeries;
+let markers = [];
+let tradeLines = [];
+
+function createChart() {
+  const container = document.getElementById('chart');
+  chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc', fontSize: 12 },
+    grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: '#758696', width: 1, style: 0, labelBackgroundColor: '#2962ff' }, horzLine: { color: '#758696', width: 1, style: 0, labelBackgroundColor: '#2962ff' } },
+    rightPriceScale: { borderColor: '#2a2e39', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: 12, barSpacing: 8 },
+    handleScroll: true,
+    handleScale: true,
+  });
+
+  // Candlestick series
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  });
+
+  // Volume series
+  volumeSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'vol',
+  });
+  chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+
+  // Crosshair
+  chart.subscribeCrosshairMove(p => {
+    const info = document.getElementById('crosshairInfo');
+    if (!p || !p.time) { info.style.display = 'none'; return; }
+    info.style.display = 'block';
+    if (p.seriesData) {
+      const candle = p.seriesData.get(candleSeries);
+      const vol = p.seriesData.get(volumeSeries);
+      if (candle) {
+        document.getElementById('chO').textContent = candle.open.toFixed(2);
+        document.getElementById('chH').textContent = candle.high.toFixed(2);
+        document.getElementById('chL').textContent = candle.low.toFixed(2);
+        document.getElementById('chC').textContent = candle.close.toFixed(2);
+        document.getElementById('chV').textContent = vol ? (vol.value / 1e6).toFixed(2) + 'M' : '—';
+      }
+    }
+  });
+
+  // Resize
+  const ro = new ResizeObserver(() => { chart.applyOptions({ width: container.clientWidth, height: container.clientHeight }); });
+  ro.observe(container);
+}
+
+// ============================================================
+// RENDER DATA
+// ============================================================
+function renderData() {
+  if (!CANDLES.length) return;
+
+  // Candles — normalize time to seconds (Lightweight Charts needs unix seconds)
+  const candleData = CANDLES.map(c => ({
+    time: typeof c.time === 'number' ? (c.time > 1e12 ? Math.floor(c.time / 1000) : c.time) : Math.floor(new Date(c.time).getTime() / 1000),
+    open: c.open, high: c.high, low: c.low, close: c.close,
+  }));
+  // Deduplicate and sort
+  const seen = new Set();
+  const uniqueCandles = candleData.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; }).sort((a,b) => a.time - b.time);
+  candleSeries.setData(uniqueCandles);
+
+  // Volume
+  const volData = CANDLES.map(c => ({
+    time: typeof c.time === 'number' ? (c.time > 1e12 ? Math.floor(c.time / 1000) : c.time) : Math.floor(new Date(c.time).getTime() / 1000),
+    value: c.volume || 0,
+    color: c.close >= c.open ? '#26a69a33' : '#ef535033',
+  }));
+  const uniqueVol = volData.filter(c => !seen.has(c.time + '_vol') && (seen.add(c.time + '_vol') || true)).sort((a,b) => a.time - b.time);
+  volumeSeries.setData(uniqueVol);
+
+  // Markers
+  updateMarkers(TRADES);
+
+  // Header stats
+  renderHeaderStats();
+
+  // Trade list
+  renderTradeList(TRADES);
+
+  // Scroll to last trade
+  if (TRADES.length) {
+    chart.timeScale().scrollToPosition(0.1, false);
+  }
+}
+
+function toSec(ts) {
+  if (!ts) return 0;
+  return typeof ts === 'number' ? (ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts)) : Math.floor(new Date(ts).getTime() / 1000);
+}
+
+function updateMarkers(trades) {
+  markers = trades.map(t => ({
+    time: toSec(t.entryTime),
+    position: t.direction === 'BUY' ? 'belowBar' : 'aboveBar',
+    color: t.direction === 'BUY' ? '#26a69a' : '#ef5350',
+    shape: t.direction === 'BUY' ? 'arrowUp' : 'arrowDown',
+    text: t.direction === 'BUY' ? '▲' : '▼',
+  }));
+  // Deduplicate markers at same time
+  const seen = new Set();
+  markers = markers.filter(m => {
+    const key = m.time + m.position;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  markers.sort((a, b) => a.time - b.time);
+  candleSeries.setMarkers(markers);
+}
+
+// ============================================================
+// TRADE LINES (entry, SL, TP)
+// ============================================================
+let activeLines = [];
+
+function showTradeLines(trade) {
+  clearTradeLines();
+  if (!trade) return;
+
+  const entryTime = Math.floor(trade.entryTime / 1000);
+  const exitTime = trade.exitTime ? Math.floor(trade.exitTime / 1000) : null;
+
+  // Entry line
+  activeLines.push(candleSeries.createPriceLine({ price: trade.entry, color: '#ffffff', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'ENTRY' }));
+  // SL line
+  activeLines.push(candleSeries.createPriceLine({ price: trade.sl, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SL' }));
+  // TP1 line
+  if (trade.tp1) activeLines.push(candleSeries.createPriceLine({ price: trade.tp1, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP1' }));
+  // TP2 line
+  if (trade.tp2) activeLines.push(candleSeries.createPriceLine({ price: trade.tp2, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP2' }));
+}
+
+function clearTradeLines() {
+  activeLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e) {} });
+  activeLines = [];
+}
+
+// ============================================================
+// UI RENDERING
+// ============================================================
+function renderHeaderStats() {
+  const wins = TRADES.filter(t => t.r > 0).length;
+  const losses = TRADES.filter(t => t.r <= 0 && t.exit !== 'EXPIRED').length;
+  const netR = TRADES.reduce((s, t) => s + t.r, 0);
+  const wr = TRADES.length ? (wins / TRADES.length * 100).toFixed(1) : 0;
+  const pfDenom = TRADES.filter(t => t.r < 0).reduce((s, t) => s + Math.abs(t.r), 0);
+  const pfNum = TRADES.filter(t => t.r > 0).reduce((s, t) => s + t.r, 0);
+  const pf = pfDenom > 0 ? (pfNum / pfDenom).toFixed(2) : '∞';
+
+  document.getElementById('headerStats').innerHTML = `
+    <div class="stat">Signals<span class="val">${TRADES.length}</span></div>
+    <div class="stat">Win Rate<span class="val ${wr >= 50 ? 'pos' : 'neg'}">${wr}%</span></div>
+    <div class="stat">Net R<span class="val ${netR >= 0 ? 'pos' : 'neg'}">${netR >= 0 ? '+' : ''}${netR.toFixed(2)}</span></div>
+    <div class="stat">PF<span class="val ${pf >= 1 ? 'pos' : 'neg'}">${pf}</span></div>
+  `;
+}
+
+let currentFilter = 'all';
+function renderTradeList(trades) {
+  let filtered = trades;
+  if (currentFilter === 'BUY') filtered = trades.filter(t => t.direction === 'BUY');
+  if (currentFilter === 'SELL') filtered = trades.filter(t => t.direction === 'SELL');
+  if (currentFilter === 'WIN') filtered = trades.filter(t => t.r > 0);
+  if (currentFilter === 'LOSS') filtered = trades.filter(t => t.r <= 0 && t.exit !== 'EXPIRED');
+
+  const wins = filtered.filter(t => t.r > 0).length;
+  const netR = filtered.reduce((s, t) => s + t.r, 0);
+
+  document.getElementById('summarySection').innerHTML = `
+    <h3>Summary</h3>
+    <div class="row"><span class="lbl">Showing</span><span class="val">${filtered.length} / ${TRADES.length}</span></div>
+    <div class="row"><span class="lbl">Win Rate</span><span class="val ${wins/filtered.length >= 0.5 ? 'pos' : 'neg'}">${filtered.length ? (wins/filtered.length*100).toFixed(1) : 0}%</span></div>
+    <div class="row"><span class="lbl">Net R</span><span class="val ${netR >= 0 ? 'pos' : 'neg'}">${netR >= 0 ? '+' : ''}${netR.toFixed(2)}</span></div>
+  `;
+
+  const list = document.getElementById('tradeList');
+  list.innerHTML = filtered.map((t, i) => {
+    const idx = trades.indexOf(t);
+    const rClass = t.r > 0 ? 'win' : t.exit === 'EXPIRED' ? 'exp' : 'loss';
+    const entryMs = t.entryTime > 1e12 ? t.entryTime : t.entryTime * 1000;
+    const date = new Date(entryMs);
+    const dateStr = `${date.getUTCMonth()+1}/${date.getUTCDate()} ${String(date.getUTCHours()).padStart(2,'0')}:${String(date.getUTCMinutes()).padStart(2,'0')}`;
+    return `<div class="trade-item" data-idx="${idx}">
+      <div class="top">
+        <span class="dir ${t.direction.toLowerCase()}">${t.direction} #${idx+1}</span>
+        <span class="result ${rClass}">${t.r >= 0 ? '+' : ''}${t.r.toFixed(2)}R</span>
+      </div>
+      <div class="meta">
+        <span>${dateStr}</span>
+        <span>${t.trigger}</span>
+        <span>${t.exit}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Click handlers
+  list.querySelectorAll('.trade-item').forEach(el => {
+    el.addEventListener('click', () => {
+      list.querySelectorAll('.trade-item').forEach(e => e.classList.remove('selected'));
+      el.classList.add('selected');
+      const idx = parseInt(el.dataset.idx);
+      selectTrade(trades[idx]);
+    });
+  });
+}
+
+function selectTrade(trade) {
+  if (!trade) return;
+  showTradeLines(trade);
+
+  // Scroll chart to trade
+  chart.timeScale().scrollToTime(toSec(trade.entryTime));
+
+  // Detail panel
+  const mfeClass = trade.mfe >= 0 ? 'pos' : 'neg';
+  const maeClass = trade.mae >= 0 ? 'neg' : 'neg';
+  const rClass = trade.r >= 0 ? 'pos' : 'neg';
+  const entryMs = trade.entryTime > 1e12 ? trade.entryTime : trade.entryTime * 1000;
+  const date = new Date(entryMs);
+  const dateStr = `${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')} ${String(date.getUTCHours()).padStart(2,'0')}:${String(date.getUTCMinutes()).padStart(2,'0')} UTC`;
+
+  document.getElementById('tradeDetail').innerHTML = `
+    <h3>${trade.direction} #${TRADES.indexOf(trade)+1} — ${trade.trigger}</h3>
+    <div class="detail-grid">
+      <span class="lbl">Date</span><span class="val">${dateStr}</span>
+      <span class="lbl">Entry</span><span class="val">${trade.entry.toFixed(2)}</span>
+      <span class="lbl">SL</span><span class="val neg">${trade.sl.toFixed(2)}</span>
+      <span class="lbl">TP1</span><span class="val pos">${trade.tp1 ? trade.tp1.toFixed(2) : '—'}</span>
+      <span class="lbl">TP2</span><span class="val pos">${trade.tp2 ? trade.tp2.toFixed(2) : '—'}</span>
+      <span class="lbl">Exit</span><span class="val ${trade.r >= 0 ? 'pos' : 'neg'}">${trade.exitPrice ? trade.exitPrice.toFixed(2) : '—'}</span>
+      <span class="lbl">Exit Type</span><span class="val">${trade.exit}</span>
+      <span class="lbl">R Result</span><span class="val ${rClass}">${trade.r >= 0 ? '+' : ''}${trade.r.toFixed(2)}R</span>
+      <span class="lbl">MFE</span><span class="val pos">+${trade.mfe.toFixed(2)}R</span>
+      <span class="lbl">MAE</span><span class="val neg">-${trade.mae.toFixed(2)}R</span>
+      <span class="lbl">Bars Held</span><span class="val">${trade.bars}</span>
+      <span class="lbl">Risk (ATR)</span><span class="val">${trade.riskAtr ? trade.riskAtr.toFixed(2) : '—'}</span>
+      <span class="lbl">Regime</span><span class="val">${trade.regime || '—'}</span>
+    </div>
+  `;
+}
+
+// ============================================================
+// FILTER BUTTONS
+// ============================================================
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    renderTradeList(TRADES);
+  });
+});
+
+// ============================================================
+// INIT
+// ============================================================
+(async function init() {
+  await loadData();
+  createChart();
+  renderData();
+})();
+</script>
+</body>
+</html>

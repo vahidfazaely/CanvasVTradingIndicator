@@ -1,13 +1,10 @@
 # CanvasV MTF Signal
 
-A multi-timeframe **4H Trend + 1H Confirmation + 15M Entry** buy/sell indicator, with two implementations maintained side by side:
+A multi-timeframe **4H Trend + 1H Confirmation + 15M Entry** buy/sell indicator built in TradingView Pine Script v5.
 
 | Platform | Language | File |
 |---|---|---|
 | TradingView | Pine Script v5 | [`TradingView/MyBuySellIndicator.pine`](TradingView/MyBuySellIndicator.pine) |
-| MetaTrader 5 | MQL5 | [`MT5/MyBuySellIndicator.mq5`](MT5/MyBuySellIndicator.mq5) |
-
-> This repository is the **canonical source of truth** for the project. Changes to the indicator are made here first and then deployed to each platform.
 
 ---
 
@@ -43,10 +40,7 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 - **v3.4.1 observability (Phase 4A):** the logger now captures market **context** per event — H4 slope magnitude (%), H4 EMA separation (%), price distance from the 4H EMA50 (in ATR), an **ATR volatility regime** (current ATR vs its own 200-bar SMA → LOW / NORMAL / HIGH / EXTREME; ratio shown as %), **1H confirmation freshness** (entry-TF bars since the confirmed 1H state last updated; on 15m it cycles 0–3 per 1H candle), **bars since the previous signal** (`N/A` for the first), and — per resolved signal — **resolution context**: outcome bars + elapsed time, the H4 and 1H state at the resolution candle, and whether the original directional alignment remained `INTACT` / `BROKEN`. `— DECISION LOG —` gains a `— CONTEXT —` and `— RESOLUTION —` section; `— DIAGNOSTIC STATS —` gains candidate averages (score, H4 slope, H4 sep, H4 dist, ATR, 1H age, resolution bars) and an outcome-count row (`SL / TP1 / TP2 / AMB / EXP / SUP`). New `ATR regime lookback (diagnostic)` input (default 200, Diagnostics group). All values are observation-only — they never feed back into any gate, score, or signal.
 - **Visuals (v3.4.0 cleanup):** a 2-color directional language — **GREEN** = bullish/BUY/PASS, **RED** = bearish/SELL/FAIL, with WHITE/SILVER for neutral values and blue/orange purely for EMA line identification. BUY/SELL/STRONG markers are green/red with direction labels; the latest-signal score label matches direction; ENTRY is white/neutral, SL red, TP1/TP2 share one directional color (green for BUY, red for SELL). The info panel is compact (11 rows): TREND → SIGNAL → SCORE → ENTRY → SL → TP1 → TP2 → RISK → R:R, plus one context footer (`15M SIGNAL · 1H BULLISH · ADX 35.8` with ENABLED/DISABLED status; red with the reason on blocked timeframes / config errors). Every element individually toggleable.
 
-## MT5 version
 
-- **Phase 2 (v2.00)** of the MQL5 build: H4 trend + **M15 entry** (the MT5 version is M15-attached by design), ADX filter, H4 slope filter, ATR SL/TP1/TP2, 0–100 scoring, info panel, and input groups.
-- Compiles with **0 errors / 0 warnings** in MetaEditor.
 
 ---
 
@@ -113,5 +107,4 @@ See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
 ## Development status
 
 - **TradingView:** `v3.4.4` — three-layer TF architecture with a **15m / 1H / 4H signal-engine policy**, **Phase 1 quality gates**, the **Phase 2 structural risk engine** (structural SL, risk validation, R-based TP1/TP2), the **v3.3.0 Signal Decision Logger** (first-failure chain, gate-status table, decision statistics, event history, MFE/MAE outcome tracker), the **v3.4.0 presentation-only cleanup** (2-color directional language, compact 11-row panel), the **v3.4.1 observability release** (Phase 4A context fields), the **v3.4.2 workflow release** (CVOUT resolution alerts + CVLOG time fields + clipboard/collector helpers), the **v3.4.3 performance release** (event-driven debug tables — fixes the "Heavy script" runtime warning), and the **v3.4.4 sensitivity release** (Signal Sensitivity presets for 15m frequency tuning; Conservative = exact prior behavior) — working and compiling in the Pine Editor.
-- **MT5:** Phase 2 `v2.00` — working on M15 charts.
 - **Next milestone:** a Pine `strategy()` backtest version (planned, not yet implemented).

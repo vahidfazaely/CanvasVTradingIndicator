@@ -1,0 +1,103 @@
+{
+  "baseline": {
+    "totalSignals": 188,
+    "totalTrades": 188,
+    "buyTrades": 100,
+    "sellTrades": 88,
+    "winners": 83,
+    "losers": 105,
+    "winRate": 44.148936170212764,
+    "profitFactor": 0.8051634204649954,
+    "totalR": -17.918401363726133,
+    "avgR": -0.09531064555173475,
+    "avgWinner": 0.8921434831646498,
+    "avgLoser": -0.8758696234894481,
+    "maxDrawdownR": -18.805418057686396,
+    "slHitPct": 44.148936170212764,
+    "tpHitPct": 35.1063829787234,
+    "avgMFE": 0.7666400899123635,
+    "avgMAE": 0.8213873371323264,
+    "avgHoldingBars": 10.382978723404255,
+    "slTrades": 83,
+    "tpTrades": 66,
+    "expiredTrades": 38,
+    "supersededTrades": 0
+  },
+  "dataset": {
+    "symbol": "BTCUSDT",
+    "timeframe": "M15",
+    "candles": 17280,
+    "start": 1772257500000,
+    "end": 1787808600000
+  },
+  "slClassification": {
+    "STOP_TOO_TIGHT": {
+      "count": 22,
+      "avgPostMFE": 2.3476980378086996
+    },
+    "LATE_ENTRY": {
+      "count": 30,
+      "avgPostMFE": 0.08173943820244306
+    },
+    "MARGINAL_STOP": {
+      "count": 6,
+      "avgPostMFE": 0.7682219150375574
+    },
+    "CONTINUATION": {
+      "count": 23,
+      "avgPostMFE": 0.07357154564331568
+    },
+    "OVEREXTENDED": {
+      "count": 2,
+      "avgPostMFE": 0
+    }
+  },
+  "periodA": {
+    "totalSignals": 96,
+    "totalTrades": 96,
+    "buyTrades": 45,
+    "sellTrades": 51,
+    "winners": 46,
+    "losers": 50,
+    "winRate": 47.91666666666667,
+    "profitFactor": 0.8467400170901707,
+    "totalR": -6.541590694887495,
+    "avgR": -0.06814156973841141,
+    "avgWinner": 0.7856820796782115,
+    "avgLoser": -0.8536593272017042,
+    "maxDrawdownR": -9.862436607479513,
+    "slHitPct": 39.58333333333333,
+    "tpHitPct": 35.41666666666667,
+    "avgMFE": 0.7993822920843914,
+    "avgMAE": 0.771437757582608,
+    "avgHoldingBars": 11.041666666666666,
+    "slTrades": 38,
+    "tpTrades": 34,
+    "expiredTrades": 23,
+    "supersededTrades": 0
+  },
+  "periodB": {
+    "totalSignals": 91,
+    "totalTrades": 91,
+    "buyTrades": 54,
+    "sellTrades": 37,
+    "winners": 37,
+    "losers": 54,
+    "winRate": 40.65934065934066,
+    "profitFactor": 0.7850850773363109,
+    "totalR": -10.376811164551217,
+    "avgR": -0.11403089191814525,
+    "avgWinner": 1.024500890317719,
+    "avgLoser": -0.894136001968645,
+    "maxDrawdownR": -11.263827858511481,
+    "slHitPct": 48.35164835164835,
+    "tpHitPct": 35.16483516483517,
+    "avgMFE": 0.7403829319510941,
+    "avgMAE": 0.8678766802125539,
+    "avgHoldingBars": 9.76923076923077,
+    "slTrades": 44,
+    "tpTrades": 32,
+    "expiredTrades": 15,
+    "supersededTrades": 0
+  }
+}

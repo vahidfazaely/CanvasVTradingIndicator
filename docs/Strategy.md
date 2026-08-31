@@ -1,6 +1,6 @@
 # Strategy — CanvasV MTF Signal
 
-This document describes the **current baseline** (TradingView `v3.4.4` / MT5 Phase 2 `v2.00`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v3.4.4`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
 
 ---
 
@@ -292,12 +292,8 @@ The `Signal Sensitivity` input (default **Conservative**) selectively relaxes SE
 | Volatility floor % | `minVolPct` (0.05) | 0.04 | 0.03 |
 | Score slope (STRONG tier) | strict | strict | strict |
 
-**Never relaxed by any preset:** 4H direction (EMA50/200), 4H separation, entry structure / gap expansion, optional filters, `minScore` (75), structural SL, max-risk gate, TP/RR, repaint protection, `request.security` calls, alerts, MT5. Presets only relax — they never tighten below what the user configured. In Conservative every effective threshold equals its input, so the signal decision is byte-identical to v3.4.3.
+**Never relaxed by any preset:** 4H direction (EMA50/200), 4H separation, entry structure / gap expansion, optional filters, `minScore` (75), structural SL, max-risk gate, TP/RR, repaint protection, `request.security` calls, alerts. Presets only relax — they never tighten below what the user configured. In Conservative every effective threshold equals its input, so the signal decision is byte-identical to v3.4.3.
 
 The score keeps the STRICT 4H slope, so flat / un-gated-slope setups score 75 and print as regular BUY/SELL; 100/STRONG still requires a genuinely rising/falling 4H plus full alignment.
 
-## 13. MT5 differences (Phase 2 v2.00)
 
-- Attached to an **M15 chart** (enforced at init).
-- Scoring is fixed at 25/25/25/25 (no weights input yet), minimum 75, no STRONG tier, no optional filters.
-- Alert system: once per new confirmed signal, with symbol, direction, Entry/SL/TP1/TP2 and score.

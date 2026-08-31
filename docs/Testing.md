@@ -277,14 +277,6 @@ With invalid settings, the panel must show `CONFIG ERROR` (red header) with a re
 
 Each change must take effect immediately after re-running the script on the chart.
 
-## 9. MT5 parity (informational)
-
-The TradingView and MT5 versions implement the same core logic but are **not** expected to be tick-identical:
-
-- TradingView uses exchange-timezone 4H candles; MT5 uses broker server time — 4H bar boundaries can shift slightly.
-- The MT5 version is M15-attached with the H4 trend and M15 entry; the TradingView v2.4.0 architecture is a 15m / 1H / 4H signal-engine system with a 1H confirmation layer.
-- Compare *patterns* (same signals on the same dates at the same H4 alignment), not exact arrow positions.
-
-## 10. Backtest (future)
+## 9. Backtest (future)
 
 A Pine `strategy()` backtest version is planned. Until then, manual chart verification is the primary testing method.

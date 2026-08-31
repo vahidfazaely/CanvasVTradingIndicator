@@ -1,0 +1,782 @@
+//@version=5
+//+------------------------------------------------------------------+
+//|  CanvasV V4 FAST - TradingView (Pine Script v5)                  |
+//|  Fast-trade engine, 15m-first.                                   |
+//|                                                                  |
+//|  Pipeline (Phase 1 core):                                        |
+//|    REGIME -> DIRECTION -> SETUP -> TRIGGER -> RISK -> POSITION   |
+//|                                                                  |
+//|  Design rules (from the Phase 0 audit + approved architecture):  |
+//|   * Chart-TF series only - ZERO request.security calls, so the   |
+//|     repaint surface is minimal and 1H/4H are never hard gates.   |
+//|   * Confirmed-bar only: a signal prints only on the close of a   |
+//|     closed candle (barstate.isconfirmed). Confirmed = signal.    |
+//|   * Structural SL / ATR fallback / R-based TP1/TP2: the exact    |
+//|     V3 risk model, reused unchanged.                             |
+//|   * FLAT/LONG/SHORT position state with SL/TP/expiry/opposite    |
+//|     exits, live R, MFE/MAE - promoted from V3's debug tracker.   |
+//|   * No ML, no SMC, no trailing stop, no 1D/5m engine, no giant   |
+//|     diagnostics. One compact decisions log + V4LOG/V4OUT alerts. |
+//|   * All parameters are CONFIGURABLE and deliberately UNTUNED -   |
+//|     collect evidence before changing any default.                |
+//|                                                                  |
+//|  v4.1.0 - NORMAL/DEBUG visual mode + SL post-exit diagnostics     |
+//+------------------------------------------------------------------+
+indicator("CanvasV V4 FAST", shorttitle = "CanvasV V4", overlay = true, max_lines_count = 10, max_labels_count = 50)
+
+VERSION = "v4.1.0"
+
+//--------------------------------------------------------------
+// Inputs
+//--------------------------------------------------------------
+grpRegime  = "=== Regime ==="
+grpDir     = "=== Direction / Momentum ==="
+grpTgr     = "=== Triggers ==="
+grpRisk    = "=== Risk ==="
+grpPos     = "=== Position ==="
+grpVis     = "=== Visuals ==="
+grpAlerts  = "=== Alerts ==="
+grpMode    = "=== Mode ==="
+grpDiag    = "=== Diagnostics ==="
+
+//--- Regime: transparent trend/range + volatility state
+regimeBars     = input.int(10,  "Regime slope lookback (bars)", minval = 2, group = grpRegime, tooltip = "EMA(slow) slope is measured over this many bars, normalized to ATR/bar.")
+regimeMinSlope = input.float(0.05, "Min regime slope (ATR per bar)", minval = 0, group = grpRegime, tooltip = "Below this |slope| the regime is classified RANGING. Not tuned - collect evidence first.")
+atrRegimeLen   = input.int(100, "ATR regime lookback (bars)", minval = 20, group = grpRegime)
+highVolPct     = input.float(130.0, "High volatility threshold (ATR % of its avg)", minval = 100, group = grpRegime, tooltip = "ATR above this % of its own average classifies the regime HIGH VOL.")
+atrPeriod      = input.int(14,  "ATR period", minval = 1, group = grpRegime)
+
+//--- Direction / momentum
+emaTrigLen  = input.int(9,  "Trigger EMA",  minval = 2, group = grpDir)
+emaDirLen   = input.int(21, "Direction EMA", minval = 2, group = grpDir)
+emaSlowLen  = input.int(50, "Slow EMA",     minval = 3, group = grpDir)
+momSlopeBars = input.int(3, "Momentum slope bars", minval = 1, group = grpDir)
+
+//--- Triggers (both configurable; the trigger is an EVENT on a confirmed bar)
+enablePullback    = input.bool(true, "Enable pullback-resume trigger", group = grpTgr)
+enableBreakout    = input.bool(true, "Enable breakout trigger", group = grpTgr)
+pullbackLookback  = input.int(5,    "Pullback lookback (bars)", minval = 2, group = grpTgr)
+pullbackTolPct    = input.float(0.5, "Pullback touch tolerance (%)", minval = 0, group = grpTgr)
+breakoutBars      = input.int(10,   "Breakout lookback (bars)", minval = 3, group = grpTgr)
+maxExtAtr         = input.float(2.5, "Max entry extension (ATR from direction EMA)", minval = 0.1, group = grpTgr, tooltip = "The extension guard: |close - direction EMA| / ATR must be <= this. This is the entry-quality hard gate.")
+minBodyPct        = input.float(0.0, "Min candle body (%) (0 = off)", minval = 0, maxval = 100, group = grpTgr)
+
+//--- Risk (V3 structural model, unchanged)
+swingLookback   = input.int(10,  "Swing lookback (bars)", minval = 2, group = grpRisk)
+structBufferAtr = input.float(0.5, "Structure buffer (ATR)", minval = 0, group = grpRisk)
+minRiskAtr      = input.float(0.5, "Minimum risk (ATR)", minval = 0.01, group = grpRisk)
+maxRiskAtr      = input.float(2.5, "Maximum risk (ATR)", minval = 0.01, group = grpRisk)
+tp1R            = input.float(1.0, "TP1 R multiple", minval = 0.01, group = grpRisk)
+tp2R            = input.float(2.5, "TP2 R multiple", minval = 0.01, group = grpRisk)
+atrFallbackMult = 1.5     // fixed ATR fallback for too-tight/invalid structure only
+
+//--- Position
+outcomeBars = input.int(20, "Position expiry (bars)", minval = 2, group = grpPos)
+
+//--- Visuals
+showPanel   = input.bool(true, "Show panel", group = grpVis)
+showMarkers = input.bool(true, "Show BUY/SELL markers", group = grpVis)
+showLevels  = input.bool(true, "Show Entry/SL/TP lines", group = grpVis)
+showLog     = input.bool(true, "Show decisions log (DEBUG)", group = grpVis)
+showEMAs    = input.bool(true, "Show EMAs (DEBUG)", group = grpVis)
+
+//--- Alerts
+enableAlerts     = input.bool(false, "Enable entry alerts", group = grpAlerts)
+enableDiagAlerts = input.bool(false, "Enable diagnostic V4LOG/V4OUT alerts", group = grpAlerts)
+
+//--- Mode: presentation/diagnostics ONLY - trading logic is identical in both
+visualMode = input.string("NORMAL", "Visual Mode", options = ["NORMAL", "DEBUG"], group = grpMode, tooltip = "NORMAL = clean SuperTrend-style chart (one trend line, ▲/▼ markers, compact panel). DEBUG = full EMA set, per-signal record labels, decisions log, post-SL observation. Signal logic is identical in both.")
+
+//--- Diagnostics
+postSlWindow = input.int(10, "Post-SL observation window (bars)", minval = 1, group = grpDiag, tooltip = "After an SL-first exit, watch this many confirmed bars and report the max favorable excursion in R (\"what happened after the stop\"). Diagnostic only - never feeds back into signal logic.")
+
+//--------------------------------------------------------------
+// Series (chart-TF only - no request.security, no lookahead)
+//--------------------------------------------------------------
+emaTrig = ta.ema(close, emaTrigLen)
+emaDir  = ta.ema(close, emaDirLen)
+emaSlow = ta.ema(close, emaSlowLen)
+atrVal  = ta.atr(atrPeriod)
+atrAvg  = ta.sma(atrVal, atrRegimeLen)
+atrVsAvg = atrVal / math.max(atrAvg, 1e-10) * 100
+
+isConfirmed = barstate.isconfirmed
+
+//--------------------------------------------------------------
+// Regime: trend/range + volatility state (transparent, no ML)
+//--------------------------------------------------------------
+regimeSlope = (emaSlow - emaSlow[regimeBars]) / math.max(atrVal * regimeBars, 1e-10)
+trending    = math.abs(regimeSlope) >= regimeMinSlope
+highVol     = atrVsAvg >= highVolPct
+//--- Regime direction requires slow-EMA slope AND EMA alignment
+trendUp = trending and emaDir > emaSlow and emaSlow > emaSlow[regimeBars]
+trendDn = trending and emaDir < emaSlow and emaSlow < emaSlow[regimeBars]
+
+//--------------------------------------------------------------
+// Direction + momentum -> setup state (a SETUP is a standing
+// condition, never a signal by itself)
+//--------------------------------------------------------------
+momUp = emaTrig > emaTrig[momSlopeBars] and close >= emaDir
+momDn = emaTrig < emaTrig[momSlopeBars] and close <= emaDir
+
+setupUp = trendUp and momUp
+setupDn = trendDn and momDn
+
+//--------------------------------------------------------------
+// Triggers (events on confirmed bars)
+//  Pullback resume : price touched the direction EMA within the
+//                    lookback (prior bars) and now reclaims the
+//                    trigger EMA from below/above.
+//  Breakout        : confirmed close beyond the prior N-bar extreme.
+//--------------------------------------------------------------
+pullbackTol = pullbackTolPct / 100.0
+touchLowUp  = ta.lowest(low, pullbackLookback)[1] <= emaDir * (1 + pullbackTol)
+touchHighDn = ta.highest(high, pullbackLookback)[1] >= emaDir * (1 - pullbackTol)
+reclaimUp   = close > emaTrig and close[1] <= emaTrig[1]
+reclaimDn   = close < emaTrig and close[1] >= emaTrig[1]
+pullbackUp  = enablePullback and touchLowUp and reclaimUp
+pullbackDn  = enablePullback and touchHighDn and reclaimDn
+
+breakUp = enableBreakout and close > ta.highest(high, breakoutBars)[1]
+breakDn = enableBreakout and close < ta.lowest(low, breakoutBars)[1]
+
+triggerUp = pullbackUp or breakUp
+triggerDn = pullbackDn or breakDn
+
+//--------------------------------------------------------------
+// Entry quality (hard)
+//  Extension guard : distance from the direction EMA in ATR.
+//  Candle body     : optional floor (0 = off).
+//--------------------------------------------------------------
+candleRange = high - low
+bodyPct = candleRange > 0 ? math.abs(close - open) / candleRange * 100 : 0.0
+bodyOkUp = minBodyPct <= 0 or (close > open and bodyPct >= minBodyPct)
+bodyOkDn = minBodyPct <= 0 or (close < open and bodyPct >= minBodyPct)
+
+extAtrUp = (close - emaDir) / math.max(atrVal, 1e-10)
+extAtrDn = (emaDir - close) / math.max(atrVal, 1e-10)
+extOkUp  = extAtrUp <= maxExtAtr
+extOkDn  = extAtrDn <= maxExtAtr
+
+//--------------------------------------------------------------
+// Risk validation (V3 structural model, chart series only)
+//--------------------------------------------------------------
+entry = close
+atrUsable = not na(atrVal) and atrVal > 0
+swingLow  = ta.lowest(low, swingLookback)[1]
+swingHigh = ta.highest(high, swingLookback)[1]
+structSLBuy  = swingLow  - atrVal * structBufferAtr
+structSLSell = swingHigh + atrVal * structBufferAtr
+
+riskStructBuy = entry - structSLBuy
+slModeBuy     = riskStructBuy >= minRiskAtr * atrVal
+slBuy         = slModeBuy ? structSLBuy : entry - atrFallbackMult * atrVal
+riskBuy       = entry - slBuy
+riskAtrBuy    = riskBuy / math.max(atrVal, 1e-10)
+riskGateBuyOk = atrUsable and slBuy < entry and riskAtrBuy <= maxRiskAtr
+tp1Buy        = entry + riskBuy * tp1R
+tp2Buy        = entry + riskBuy * tp2R
+
+riskStructSell = structSLSell - entry
+slModeSell     = riskStructSell >= minRiskAtr * atrVal
+slSell         = slModeSell ? structSLSell : entry + atrFallbackMult * atrVal
+riskSell       = slSell - entry
+riskAtrSell    = riskSell / math.max(atrVal, 1e-10)
+riskGateSellOk = atrUsable and slSell > entry and riskAtrSell <= maxRiskAtr
+tp1Sell        = entry - riskSell * tp1R
+tp2Sell        = entry - riskSell * tp2R
+
+//--------------------------------------------------------------
+// Config sanity (blocks signals with an invalid setup)
+//--------------------------------------------------------------
+cfgOk = emaTrigLen < emaDirLen and emaDirLen < emaSlowLen and swingLookback >= 2 and tp1R > 0 and tp2R > tp1R and maxRiskAtr > minRiskAtr
+
+//--------------------------------------------------------------
+// Position state (core, always on)
+//--------------------------------------------------------------
+var int    posState   = 0        // 1 LONG, -1 SHORT, 0 FLAT
+var int    posBar     = na
+var int    posTime    = na
+var string posDir     = ""
+var float  posEntry   = na
+var float  posSL      = na
+var float  posTP1     = na
+var float  posTP2     = na
+var float  posRisk    = na
+var float  posRiskAtr = na
+var int    posAge     = 0
+var float  posMFE     = 0.0
+var float  posMAE     = 0.0
+var bool   posTp1Hit  = false
+var bool   posTp2Hit  = false
+var bool   posSlHit   = false
+var string posOutcome = "unresolved"
+var float  posFinalR  = na
+var string posReason  = ""
+//--- Per-position DEBUG record (filled at entry, annotated at resolution)
+var float  posExtAtr   = na   // entry extension from the direction EMA, in ATR
+var float  posBodyPct  = na   // entry candle body %
+var float  posEma21    = na   // direction EMA at entry
+var float  posAtr      = na   // ATR at entry
+var float  posStructSL = na   // structural SL level (swing + buffer)
+var float  posRR1      = na
+var float  posRR2      = na
+var int    posExitBar  = na   // bar where the position resolved
+
+//--- Last signal / outcome for the panel
+var int    lastSigBar = na
+var string lastSigTxt = "WAIT"
+var string lastTrigTxt = "—"
+var string lastReasonTxt = ""
+var float  lastEntry   = na
+var float  lastSL      = na
+var float  lastTP1     = na
+var float  lastTP2     = na
+var float  lastRiskAtr = na
+var float  lastRR1     = na
+var float  lastRR2     = na
+var string lastOutcome = ""
+var float  lastFinalR  = na
+
+//--- Levels (last signal reference)
+var line  lnEntry = na
+var line  lnSL    = na
+var line  lnTP1   = na
+var line  lnTP2   = na
+var label lblEntry = na
+var label lblSL    = na
+var label lblTP1   = na
+var label lblTP2   = na
+//--- DEBUG per-signal record label + post-SL observation window state
+var label  dbgSigLabel    = na
+var string dbgSigTxt      = ""
+var label  dbgPostLabel   = na
+var bool   postActive     = false
+var int    postDir        = 0
+var float  postEntry      = na
+var float  postRisk       = na
+var int    postBars       = 0
+var float  postMax        = 0.0
+var int    postExitBar    = na
+var float  postExitLow    = na
+var float  postExitHigh   = na
+var string postWasOutcome = ""
+var int    postWasAge     = 0
+var float  postWasMFE     = 0.0
+var float  postWasMAE     = 0.0
+
+//--- Measurement: counters + bounded event log
+var int    stCand  = 0
+var int    stBuy   = 0
+var int    stSell  = 0
+var int    stOutSl  = 0
+var int    stOutTp1 = 0
+var int    stOutTp2 = 0
+var int    stOutExp = 0
+var int    stOutSup = 0
+var array<string> logArr = array.new_string()
+var int    lastLogN = -1
+
+//--------------------------------------------------------------
+// Helpers (safe manual time composition - no datetime /
+// format.timestamp, which this Pine build does not support)
+//--------------------------------------------------------------
+f_pad(n) => n < 10 ? "0" + str.tostring(n) : str.tostring(n)
+f_timeTxt(t) => f_pad(month(t)) + "-" + f_pad(dayofmonth(t)) + " " + f_pad(hour(t)) + ":" + f_pad(minute(t))
+f_rtxt(v)  => na(v) ? "--" : str.tostring(v, format.mintick)
+f_atxt(v)  => na(v) ? "--" : str.tostring(v, "#.##")
+
+//--------------------------------------------------------------
+// Candidates + entries (read pre-bar position state)
+//--------------------------------------------------------------
+candUp = isConfirmed and cfgOk and setupUp and triggerUp
+candDn = isConfirmed and cfgOk and setupDn and triggerDn
+
+canEnterLong  = posState == 0 or posState == -1
+canEnterShort = posState == 0 or posState == 1
+
+candReasonUp = not extOkUp ? "ENTRY TOO EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not canEnterLong ? "IN POSITION" : ""
+candReasonDn = not extOkDn ? "ENTRY TOO EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not canEnterShort ? "IN POSITION" : ""
+
+entryUp = candUp and extOkUp and bodyOkUp and riskGateBuyOk and canEnterLong
+entryDn = candDn and extOkDn and bodyOkDn and riskGateSellOk and canEnterShort
+
+trigUpTxt = pullbackUp ? "PULLBACK RESUME" : "BREAKOUT"
+trigDnTxt = pullbackDn ? "PULLBACK RESUME" : "BREAKOUT"
+
+//--------------------------------------------------------------
+// Position tracking + resolution (confirmed bars only)
+//--------------------------------------------------------------
+if isConfirmed and posState != 0 and bar_index > posBar
+    posAge := posAge + 1
+    favR = posState == 1 ? (high - posEntry) / math.max(posRisk, 1e-10) : (posEntry - low) / math.max(posRisk, 1e-10)
+    advR = posState == 1 ? (posEntry - low) / math.max(posRisk, 1e-10) : (high - posEntry) / math.max(posRisk, 1e-10)
+    posMFE := math.max(posMFE, favR)
+    posMAE := math.max(posMAE, advR)
+    slT  = posState == 1 ? low  <= posSL  : high >= posSL
+    tp1T = posState == 1 ? high >= posTP1 : low <= posTP1
+    tp2T = posState == 1 ? high >= posTP2 : low <= posTP2
+    if slT
+        posSlHit := true
+    if tp1T
+        posTp1Hit := true
+    if tp2T
+        posTp2Hit := true
+    if posOutcome == "unresolved"
+        if slT and (tp1T or tp2T)
+            posOutcome := "AMBIGUOUS"
+            posFinalR  := posState == 1 ? (close - posEntry) / math.max(posRisk, 1e-10) : (posEntry - close) / math.max(posRisk, 1e-10)
+        else if slT
+            posOutcome := "SL FIRST"
+            posFinalR  := -1.0
+        else if tp2T
+            posOutcome := "TP2 FIRST"
+            posFinalR  := posState == 1 ? (close - posEntry) / math.max(posRisk, 1e-10) : (posEntry - close) / math.max(posRisk, 1e-10)
+        else if tp1T
+            posOutcome := "TP1 FIRST"
+            posFinalR  := posState == 1 ? (close - posEntry) / math.max(posRisk, 1e-10) : (posEntry - close) / math.max(posRisk, 1e-10)
+        else if posAge >= outcomeBars
+            posOutcome := "EXPIRED"
+            posFinalR  := posState == 1 ? (close - posEntry) / math.max(posRisk, 1e-10) : (posEntry - close) / math.max(posRisk, 1e-10)
+    if posOutcome != "unresolved"
+        //--- Record resolution (post-hoc only; never feeds back)
+        posExitBar := bar_index
+        lastOutcome := posOutcome + " " + (na(posFinalR) ? "--" : (posFinalR >= 0 ? "+" : "") + str.tostring(posFinalR, "#.##")) + "R"
+        lastFinalR  := posFinalR
+        if posOutcome == "SL FIRST"
+            stOutSl := stOutSl + 1
+            //--- Start the post-exit observation window (diagnostic only)
+            postActive     := true
+            postDir        := posState
+            postEntry      := posEntry
+            postRisk       := posRisk
+            postBars       := 0
+            postMax        := 0.0
+            postExitBar    := bar_index
+            postExitLow    := low
+            postExitHigh   := high
+            postWasOutcome := posOutcome
+            postWasAge     := posAge
+            postWasMFE     := posMFE
+            postWasMAE     := posMAE
+        else if posOutcome == "TP1 FIRST"
+            stOutTp1 := stOutTp1 + 1
+        else if posOutcome == "TP2 FIRST"
+            stOutTp2 := stOutTp2 + 1
+        else if posOutcome == "EXPIRED"
+            stOutExp := stOutExp + 1
+        //--- Annotate the DEBUG per-signal record label with the resolution
+        if visualMode == "DEBUG" and not na(dbgSigLabel)
+            dbgSigTxt := dbgSigTxt + "\n— RESOLVED —\n" + posOutcome + " " + (na(posFinalR) ? "--" : (posFinalR >= 0 ? "+" : "") + str.tostring(posFinalR, "#.##")) + "R · " + str.tostring(posAge) + "b\nMFE +" + str.tostring(posMFE, "#.##") + "R · MAE -" + str.tostring(posMAE, "#.##") + "R"
+            label.set_text(dbgSigLabel, dbgSigTxt)
+        if array.size(logArr) >= 12
+            array.remove(logArr, 0)
+        array.push(logArr, "  EXIT " + posOutcome + " " + (na(posFinalR) ? "--" : (posFinalR >= 0 ? "+" : "") + str.tostring(posFinalR, "#.##")) + "R (" + str.tostring(posAge) + "b) MFE +" + str.tostring(posMFE, "#.##") + " MAE -" + str.tostring(posMAE, "#.##") + " · " + f_timeTxt(time))
+        if enableDiagAlerts
+            alert("V4OUT|" + syminfo.ticker + "|" + timeframe.period + "|" + posDir + "|" + posOutcome + "|" + str.tostring(posAge) + "b|MFE=+" + str.tostring(posMFE, "#.##") + "R|MAE=-" + str.tostring(posMAE, "#.##") + "R|R=" + (na(posFinalR) ? "--" : str.tostring(posFinalR, "#.##")) + "|E=" + str.tostring(posEntry, format.mintick) + "|SL=" + str.tostring(posSL, format.mintick) + "|TP1=" + str.tostring(posTP1, format.mintick) + "|TP2=" + str.tostring(posTP2, format.mintick) + "|T=" + f_timeTxt(posTime), alert.freq_once_per_bar_close)
+        posState := 0
+
+//--------------------------------------------------------------
+// Post-SL observation window (diagnostic only - never feeds back
+// into the signal logic). After an SL-first exit we watch N
+// confirmed bars and record the max favorable excursion in R:
+// "did price actually move our way after the stop was hit?"
+//--------------------------------------------------------------
+if postActive and isConfirmed and bar_index > postExitBar
+    postBars := postBars + 1
+    favPostR = postDir == 1 ? (high - postEntry) / math.max(postRisk, 1e-10) : (postEntry - low) / math.max(postRisk, 1e-10)
+    postMax := math.max(postMax, favPostR)
+    if postBars >= postSlWindow
+        postActive := false
+        if array.size(logArr) >= 12
+            array.remove(logArr, 0)
+        array.push(logArr, "  POST-SL MFE +" + str.tostring(postMax, "#.##") + "R over " + str.tostring(postBars) + "b (" + postWasOutcome + " · " + str.tostring(postWasAge) + "b · in-trade MFE +" + str.tostring(postWasMFE, "#.##") + "R / MAE -" + str.tostring(postWasMAE, "#.##") + "R)")
+        if visualMode == "DEBUG"
+            if not na(dbgPostLabel)
+                label.delete(dbgPostLabel)
+            postTxt = postWasOutcome + " -1.00R (" + str.tostring(postWasAge) + "b)\nMFE +" + str.tostring(postWasMFE, "#.##") + "R · MAE -" + str.tostring(postWasMAE, "#.##") + "R\nPOST-SL MFE +" + str.tostring(postMax, "#.##") + "R over " + str.tostring(postBars) + "b"
+            dbgPostLabel := label.new(postExitBar, postDir == 1 ? postExitLow - atrVal * 0.5 : postExitHigh + atrVal * 0.5, postTxt, xloc = xloc.bar_index, yloc = yloc.price, style = postDir == 1 ? label.style_label_down : label.style_label_up, color = color.new(color.rgb(20, 20, 28), 0), textcolor = color.white, size = size.small)
+        if enableDiagAlerts
+            alert("V4POST|" + syminfo.ticker + "|" + timeframe.period + "|" + (postDir == 1 ? "LONG" : "SHORT") + "|POST-SL MFE=+" + str.tostring(postMax, "#.##") + "R|" + str.tostring(postBars) + "b|was=" + postWasOutcome, alert.freq_once_per_bar_close)
+
+//--------------------------------------------------------------
+// Entries + candidate logging (after tracking, so an SL/TP exit on
+// the same bar resolves first and the new entry starts fresh)
+//--------------------------------------------------------------
+if entryUp
+    //--- An opposite (SHORT) position still open = superseded
+    if posState == -1
+        posOutcome := "SUPERSEDED"
+        posFinalR  := (close - posEntry) / math.max(posRisk, 1e-10)
+        lastOutcome := "SUPERSEDED " + (posFinalR >= 0 ? "+" : "") + str.tostring(posFinalR, "#.##") + "R"
+        lastFinalR  := posFinalR
+        stOutSup := stOutSup + 1
+        if array.size(logArr) >= 12
+            array.remove(logArr, 0)
+        array.push(logArr, "  EXIT SUPERSEDED " + (posFinalR >= 0 ? "+" : "") + str.tostring(posFinalR, "#.##") + "R (" + str.tostring(posAge) + "b) · " + f_timeTxt(time))
+        if enableDiagAlerts
+            alert("V4OUT|" + syminfo.ticker + "|" + timeframe.period + "|SHORT|SUPERSEDED|" + str.tostring(posAge) + "b|MFE=+" + str.tostring(posMFE, "#.##") + "R|MAE=-" + str.tostring(posMAE, "#.##") + "R|R=" + str.tostring(posFinalR, "#.##") + "|E=" + str.tostring(posEntry, format.mintick) + "|T=" + f_timeTxt(posTime), alert.freq_once_per_bar_close)
+    //--- Enter LONG
+    posState   := 1
+    posBar     := bar_index
+    posTime    := time
+    posDir     := "BUY"
+    posEntry   := entry
+    posSL      := slBuy
+    posTP1     := tp1Buy
+    posTP2     := tp2Buy
+    posRisk    := riskBuy
+    posRiskAtr := riskAtrBuy
+    posAge     := 0
+    posMFE     := 0.0
+    posMAE     := 0.0
+    posTp1Hit  := false
+    posTp2Hit  := false
+    posSlHit   := false
+    posOutcome := "unresolved"
+    posFinalR  := na
+    posReason  := trigUpTxt
+    posExtAtr   := extAtrUp
+    posBodyPct  := bodyPct
+    posEma21    := emaDir
+    posAtr      := atrVal
+    posStructSL := structSLBuy
+    posRR1      := tp1R
+    posRR2      := tp2R
+    lastSigBar  := bar_index
+    lastSigTxt  := "BUY"
+    lastTrigTxt := trigUpTxt
+    lastReasonTxt := trigUpTxt
+    lastEntry   := entry
+    lastSL      := slBuy
+    lastTP1     := tp1Buy
+    lastTP2     := tp2Buy
+    lastRiskAtr := riskAtrBuy
+    lastRR1     := (tp1Buy - entry) / math.max(riskBuy, 1e-10)
+    lastRR2     := (tp2Buy - entry) / math.max(riskBuy, 1e-10)
+    stBuy := stBuy + 1
+    if visualMode == "DEBUG"
+        if not na(dbgSigLabel)
+            label.delete(dbgSigLabel)
+        dbgSigTxt := "BUY\n" + trigUpTxt + "\nE " + f_rtxt(entry) + " · EMA21 " + f_rtxt(emaDir) + "\nExt +" + f_atxt(extAtrUp) + " ATR · Body " + f_atxt(bodyPct) + "% · ATR " + f_atxt(atrVal) + "\nStruct SL " + f_rtxt(structSLBuy) + " · SL " + f_rtxt(slBuy) + " (" + f_atxt(riskAtrBuy) + " ATR)\nTP1 " + f_rtxt(tp1Buy) + " · TP2 " + f_rtxt(tp2Buy) + " · RR " + f_atxt(tp1R) + "/" + f_atxt(tp2R)
+        dbgSigLabel := label.new(bar_index, low - atrVal * 2.0, dbgSigTxt, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_down, color = color.new(color.rgb(20, 20, 28), 0), textcolor = color.white, size = size.small)
+    //--- Levels
+    if not na(lnEntry)
+        line.delete(lnEntry)
+    if not na(lnSL)
+        line.delete(lnSL)
+    if not na(lnTP1)
+        line.delete(lnTP1)
+    if not na(lnTP2)
+        line.delete(lnTP2)
+    if not na(lblEntry)
+        label.delete(lblEntry)
+    if not na(lblSL)
+        label.delete(lblSL)
+    if not na(lblTP1)
+        label.delete(lblTP1)
+    if not na(lblTP2)
+        label.delete(lblTP2)
+    if showLevels
+        lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+        lnSL    := line.new(bar_index, slBuy,  bar_index, slBuy,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+        lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+        lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
+        lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+        lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
+        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
+    if enableAlerts
+        alert(syminfo.ticker + " " + timeframe.period + ": BUY | " + trigUpTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slBuy, format.mintick) + " TP1 " + str.tostring(tp1Buy, format.mintick) + " TP2 " + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
+    if enableDiagAlerts
+        alert("V4LOG|" + syminfo.ticker + "|" + timeframe.period + "|BUY|SIGNAL|" + trigUpTxt + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slBuy, format.mintick) + "|TP1=" + str.tostring(tp1Buy, format.mintick) + "|TP2=" + str.tostring(tp2Buy, format.mintick) + "|R=" + str.tostring(riskAtrBuy, "#.##") + "A|T=" + f_timeTxt(time), alert.freq_once_per_bar_close)
+
+if entryDn
+    if posState == 1
+        posOutcome := "SUPERSEDED"
+        posFinalR  := (posEntry - close) / math.max(posRisk, 1e-10)
+        lastOutcome := "SUPERSEDED " + (posFinalR >= 0 ? "+" : "") + str.tostring(posFinalR, "#.##") + "R"
+        lastFinalR  := posFinalR
+        stOutSup := stOutSup + 1
+        if array.size(logArr) >= 12
+            array.remove(logArr, 0)
+        array.push(logArr, "  EXIT SUPERSEDED " + (posFinalR >= 0 ? "+" : "") + str.tostring(posFinalR, "#.##") + "R (" + str.tostring(posAge) + "b) · " + f_timeTxt(time))
+        if enableDiagAlerts
+            alert("V4OUT|" + syminfo.ticker + "|" + timeframe.period + "|LONG|SUPERSEDED|" + str.tostring(posAge) + "b|MFE=+" + str.tostring(posMFE, "#.##") + "R|MAE=-" + str.tostring(posMAE, "#.##") + "R|R=" + str.tostring(posFinalR, "#.##") + "|E=" + str.tostring(posEntry, format.mintick) + "|T=" + f_timeTxt(posTime), alert.freq_once_per_bar_close)
+    posState   := -1
+    posBar     := bar_index
+    posTime    := time
+    posDir     := "SELL"
+    posEntry   := entry
+    posSL      := slSell
+    posTP1     := tp1Sell
+    posTP2     := tp2Sell
+    posRisk    := riskSell
+    posRiskAtr := riskAtrSell
+    posAge     := 0
+    posMFE     := 0.0
+    posMAE     := 0.0
+    posTp1Hit  := false
+    posTp2Hit  := false
+    posSlHit   := false
+    posOutcome := "unresolved"
+    posFinalR  := na
+    posReason  := trigDnTxt
+    posExtAtr   := extAtrDn
+    posBodyPct  := bodyPct
+    posEma21    := emaDir
+    posAtr      := atrVal
+    posStructSL := structSLSell
+    posRR1      := tp1R
+    posRR2      := tp2R
+    lastSigBar  := bar_index
+    lastSigTxt  := "SELL"
+    lastTrigTxt := trigDnTxt
+    lastReasonTxt := trigDnTxt
+    lastEntry   := entry
+    lastSL      := slSell
+    lastTP1     := tp1Sell
+    lastTP2     := tp2Sell
+    lastRiskAtr := riskAtrSell
+    lastRR1     := (entry - tp1Sell) / math.max(riskSell, 1e-10)
+    lastRR2     := (entry - tp2Sell) / math.max(riskSell, 1e-10)
+    stSell := stSell + 1
+    if visualMode == "DEBUG"
+        if not na(dbgSigLabel)
+            label.delete(dbgSigLabel)
+        dbgSigTxt := "SELL\n" + trigDnTxt + "\nE " + f_rtxt(entry) + " · EMA21 " + f_rtxt(emaDir) + "\nExt " + f_atxt(extAtrDn) + " ATR · Body " + f_atxt(bodyPct) + "% · ATR " + f_atxt(atrVal) + "\nStruct SL " + f_rtxt(structSLSell) + " · SL " + f_rtxt(slSell) + " (" + f_atxt(riskAtrSell) + " ATR)\nTP1 " + f_rtxt(tp1Sell) + " · TP2 " + f_rtxt(tp2Sell) + " · RR " + f_atxt(tp1R) + "/" + f_atxt(tp2R)
+        dbgSigLabel := label.new(bar_index, high + atrVal * 2.0, dbgSigTxt, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_up, color = color.new(color.rgb(20, 20, 28), 0), textcolor = color.white, size = size.small)
+    //--- Levels
+    if not na(lnEntry)
+        line.delete(lnEntry)
+    if not na(lnSL)
+        line.delete(lnSL)
+    if not na(lnTP1)
+        line.delete(lnTP1)
+    if not na(lnTP2)
+        line.delete(lnTP2)
+    if not na(lblEntry)
+        label.delete(lblEntry)
+    if not na(lblSL)
+        label.delete(lblSL)
+    if not na(lblTP1)
+        label.delete(lblTP1)
+    if not na(lblTP2)
+        label.delete(lblTP2)
+    if showLevels
+        lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+        lnSL    := line.new(bar_index, slSell, bar_index, slSell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+        lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
+        lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
+        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
+        lblSL    := label.new(bar_index, slSell, "SL "    + str.tostring(slSell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+        lblTP1   := label.new(bar_index, tp1Sell, "TP1 "  + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.small)
+        lblTP2   := label.new(bar_index, tp2Sell, "TP2 "  + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.small)
+    if enableAlerts
+        alert(syminfo.ticker + " " + timeframe.period + ": SELL | " + trigDnTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slSell, format.mintick) + " TP1 " + str.tostring(tp1Sell, format.mintick) + " TP2 " + str.tostring(tp2Sell, format.mintick), alert.freq_once_per_bar_close)
+    if enableDiagAlerts
+        alert("V4LOG|" + syminfo.ticker + "|" + timeframe.period + "|SELL|SIGNAL|" + trigDnTxt + "|E=" + str.tostring(entry, format.mintick) + "|SL=" + str.tostring(slSell, format.mintick) + "|TP1=" + str.tostring(tp1Sell, format.mintick) + "|TP2=" + str.tostring(tp2Sell, format.mintick) + "|R=" + str.tostring(riskAtrSell, "#.##") + "A|T=" + f_timeTxt(time), alert.freq_once_per_bar_close)
+
+//--- Log rejected / skipped candidates (measurement only)
+if candUp
+    stCand := stCand + 1
+    if not entryUp
+        if array.size(logArr) >= 12
+            array.remove(logArr, 0)
+        array.push(logArr, f_timeTxt(time) + " BUY " + (candReasonUp == "" ? "REJECTED" : candReasonUp))
+        if enableDiagAlerts
+            alert("V4LOG|" + syminfo.ticker + "|" + timeframe.period + "|BUY|" + (candReasonUp == "" ? "REJECTED" : candReasonUp) + "|T=" + f_timeTxt(time), alert.freq_once_per_bar_close)
+if candDn
+    stCand := stCand + 1
+    if not entryDn
+        if array.size(logArr) >= 12
+            array.remove(logArr, 0)
+        array.push(logArr, f_timeTxt(time) + " SELL " + (candReasonDn == "" ? "REJECTED" : candReasonDn))
+        if enableDiagAlerts
+            alert("V4LOG|" + syminfo.ticker + "|" + timeframe.period + "|SELL|" + (candReasonDn == "" ? "REJECTED" : candReasonDn) + "|T=" + f_timeTxt(time), alert.freq_once_per_bar_close)
+
+//--------------------------------------------------------------
+// Plots
+//--------------------------------------------------------------
+//--- Visual-only: ATR-scaled marker gap (never used in trading logic)
+markerGapAtr = 0.5
+
+//--- NORMAL: one SuperTrend-style trend line (direction EMA colored by
+//    state). The three EMA calculations stay in the logic; their raw
+//    plots are DEBUG-only.
+trendCol = trendUp ? color.new(color.green, 0) : trendDn ? color.new(color.red, 0) : color.new(color.gray, 60)
+plot(emaDir, "Trend", color = visualMode == "NORMAL" ? trendCol : color.new(color.white, 100), linewidth = 2)
+//--- DEBUG: raw EMA set (research only)
+plot(emaTrig, "Trigger EMA",  color = visualMode == "DEBUG" and showEMAs ? color.new(color.blue, 0) : color.new(color.white, 100), linewidth = 1)
+plot(emaDir, "Direction EMA", color = visualMode == "DEBUG" and showEMAs ? color.new(color.orange, 0) : color.new(color.white, 100), linewidth = 1)
+plot(emaSlow, "Slow EMA",     color = visualMode == "DEBUG" and showEMAs ? color.new(color.silver, 0) : color.new(color.white, 100), linewidth = 2)
+
+plotshape(showMarkers and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
+plotshape(showMarkers and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
+
+alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY signal")
+alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL signal")
+
+//--------------------------------------------------------------
+// Panel
+//--------------------------------------------------------------
+tfSec = timeframe.in_seconds(timeframe.period)
+tfTxt = tfSec == 900 ? "15M" : tfSec == 60 ? "1M" : tfSec == 3600 ? "1H" : tfSec == 14400 ? "4H" : tfSec == 86400 ? "1D" : str.tostring(timeframe.period)
+
+regimeTxt = trendUp ? "TRENDING ↑" : trendDn ? "TRENDING ↓" : highVol ? "HIGH VOL" : "RANGING"
+regimeCol = trendUp ? color.green : trendDn ? color.red : color.silver
+setupTxt  = setupUp ? "LONG" : setupDn ? "SHORT" : "NONE"
+setupCol  = setupUp ? color.green : setupDn ? color.red : color.silver
+sigCol    = lastSigTxt == "BUY" ? color.green : lastSigTxt == "SELL" ? color.red : color.silver
+tpCol     = lastSigTxt == "BUY" ? color.green : color.red
+
+posCurR = posState == 1 ? (close - posEntry) / math.max(posRisk, 1e-10) : posState == -1 ? (posEntry - close) / math.max(posRisk, 1e-10) : na
+posTxt  = posState == 1 ? "LONG  · " + str.tostring(posAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
+           posState == -1 ? "SHORT · " + str.tostring(posAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
+           lastOutcome == "" ? "FLAT" : "FLAT · last " + lastOutcome
+posCol  = posState == 1 ? color.green : posState == -1 ? color.red : color.silver
+
+//--- Reason: why we are in (signal trigger) or why we are waiting
+waitReason = not cfgOk ? "Config error: EMA order" :
+             not trending ? (highVol ? "High volatility" : "Regime ranging") :
+             not (setupUp or setupDn) ? "Setup not aligned" :
+             not (triggerUp or triggerDn) ? "No valid trigger" :
+             (not extOkUp and not extOkDn) ? "Entry too extended" :
+             (not riskGateBuyOk and not riskGateSellOk) ? "Risk invalid (SL too wide)" :
+             "Waiting"
+reasonTxt = posState != 0 ? lastReasonTxt : waitReason
+reasonCol = posState != 0 ? (lastSigTxt == "BUY" ? color.green : color.red) : color.silver
+
+var table v4panelN = na   // NORMAL compact panel
+var table v4panelD = na   // DEBUG research panel
+
+if showPanel and visualMode == "NORMAL"
+    if na(v4panelN)
+        v4panelN := table.new(position.top_right, 2, 9, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+    trendTxtN = trendUp ? "BULLISH" : trendDn ? "BEARISH" : "RANGING"
+    trendColN = trendUp ? color.green : trendDn ? color.red : color.silver
+    posTxtN = posState == 1 ? "LONG · " + str.tostring(posAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
+              posState == -1 ? "SHORT · " + str.tostring(posAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" : "FLAT"
+    table.cell(v4panelN, 0, 0, "CANVASV V4", text_color = color.white, text_size = size.normal)
+    table.cell(v4panelN, 1, 0, VERSION, text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 0, 1, "TIMEFRAME", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 1, tfTxt, text_color = color.white, text_size = size.normal)
+    table.cell(v4panelN, 0, 2, "TREND", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 2, trendTxtN, text_color = trendColN, text_size = size.normal)
+    table.cell(v4panelN, 0, 3, "SIGNAL", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 3, lastSigTxt, text_color = sigCol, text_size = size.large)
+    table.cell(v4panelN, 0, 4, "POSITION", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 4, posTxtN, text_color = posCol, text_size = size.normal)
+    table.cell(v4panelN, 0, 5, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 5, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
+    table.cell(v4panelN, 0, 6, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 6, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
+    table.cell(v4panelN, 0, 7, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 7, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = tpCol, text_size = size.normal)
+    table.cell(v4panelN, 0, 8, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelN, 1, 8, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = tpCol, text_size = size.normal)
+else
+    if not na(v4panelN)
+        table.delete(v4panelN)
+        v4panelN := na
+
+if showPanel and visualMode == "DEBUG"
+    if na(v4panelD)
+        v4panelD := table.new(position.top_right, 2, 13, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+    table.cell(v4panelD, 0, 0, "CANVASV FAST", text_color = color.white,  text_size = size.normal)
+    table.cell(v4panelD, 1, 0, VERSION,        text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 0, 1, "TIMEFRAME", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 1, tfTxt,        text_color = color.white,  text_size = size.normal)
+    table.cell(v4panelD, 0, 2, "REGIME", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 2, regimeTxt, text_color = regimeCol, text_size = size.normal)
+    table.cell(v4panelD, 0, 3, "SETUP", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 3, setupTxt, text_color = setupCol, text_size = size.normal)
+    table.cell(v4panelD, 0, 4, "TRIGGER", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 4, lastTrigTxt, text_color = color.white, text_size = size.small)
+    table.cell(v4panelD, 0, 5, "SIGNAL", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 5, lastSigTxt, text_color = sigCol, text_size = size.large)
+    table.cell(v4panelD, 0, 6, "REASON", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 6, reasonTxt, text_color = reasonCol, text_size = size.small)
+    table.cell(v4panelD, 0, 7, "ENTRY", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 7, na(lastEntry) ? "--" : str.tostring(lastEntry, format.mintick), text_color = color.white, text_size = size.normal)
+    table.cell(v4panelD, 0, 8, "SL", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 8, na(lastSL) ? "--" : str.tostring(lastSL, format.mintick), text_color = color.red, text_size = size.normal)
+    table.cell(v4panelD, 0, 9, "TP1", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 9, na(lastTP1) ? "--" : str.tostring(lastTP1, format.mintick), text_color = tpCol, text_size = size.normal)
+    table.cell(v4panelD, 0, 10, "TP2", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 10, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = tpCol, text_size = size.normal)
+    table.cell(v4panelD, 0, 11, "RISK/RR", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 11, na(lastRiskAtr) ? "--" : str.tostring(lastRiskAtr, "#.##") + " ATR · " + (na(lastRR1) ? "--" : str.tostring(lastRR1, "#.##") + "/" + str.tostring(lastRR2, "#.##")), text_color = color.white, text_size = size.small)
+    table.cell(v4panelD, 0, 12, "POSITION", text_color = color.silver, text_size = size.small)
+    table.cell(v4panelD, 1, 12, posTxt, text_color = posCol, text_size = size.normal)
+else
+    if not na(v4panelD)
+        table.delete(v4panelD)
+        v4panelD := na
+
+//--------------------------------------------------------------
+// Decisions log (compact, event-driven redraw)
+//--------------------------------------------------------------
+var table v4log = na
+if showLog and visualMode == "DEBUG"
+    if na(v4log)
+        v4log := table.new(position.bottom_right, 2, 12, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+    table.cell(v4log, 0, 0, "— DECISIONS —", text_color = color.white, text_size = size.small)
+    table.cell(v4log, 1, 0, "C " + str.tostring(stCand) + " · B " + str.tostring(stBuy) + "/S " + str.tostring(stSell), text_color = color.silver, text_size = size.small)
+    table.cell(v4log, 0, 1, "OUTCOMES", text_color = color.silver, text_size = size.small)
+    table.cell(v4log, 1, 1, "SL " + str.tostring(stOutSl) + " · T1 " + str.tostring(stOutTp1) + " · T2 " + str.tostring(stOutTp2) + " · EXP " + str.tostring(stOutExp) + " · SUP " + str.tostring(stOutSup), text_color = color.silver, text_size = size.small)
+    if lastLogN != array.size(logArr)
+        lastLogN := array.size(logArr)
+        for i = 2 to 11
+            idx = array.size(logArr) - 1 - (i - 2)
+            if idx >= 0
+                rowTxt = array.get(logArr, idx)
+                table.cell(v4log, 0, i, rowTxt, text_color = color.silver, text_size = size.small)
+            else
+                table.cell(v4log, 0, i, "", text_color = color.silver, text_size = size.small)
+else
+    if not na(v4log)
+        table.delete(v4log)
+        v4log := na
+
+//--- Level lines live toggle (showLevels changed mid-session)
+var bool prevShowLevels = na
+if na(prevShowLevels)
+    prevShowLevels := showLevels
+else if showLevels != prevShowLevels
+    prevShowLevels := showLevels
+    if not showLevels
+        if not na(lnEntry)
+            line.delete(lnEntry)
+            lnEntry := na
+        if not na(lnSL)
+            line.delete(lnSL)
+            lnSL := na
+        if not na(lnTP1)
+            line.delete(lnTP1)
+            lnTP1 := na
+        if not na(lnTP2)
+            line.delete(lnTP2)
+            lnTP2 := na
+        if not na(lblEntry)
+            label.delete(lblEntry)
+            lblEntry := na
+        if not na(lblSL)
+            label.delete(lblSL)
+            lblSL := na
+        if not na(lblTP1)
+            label.delete(lblTP1)
+            lblTP1 := na
+        if not na(lblTP2)
+            label.delete(lblTP2)
+            lblTP2 := na
+    else
+        if not na(lastSigBar)
+            lnEntry := line.new(lastSigBar, lastEntry,  lastSigBar, lastEntry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+            lnSL    := line.new(lastSigBar, lastSL,     lastSigBar, lastSL,     xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+            lnTP1   := line.new(lastSigBar, lastTP1,    lastSigBar, lastTP1,    xloc = xloc.bar_index, extend = extend.right, color = color.new(tpCol, 0), style = line.style_dotted, width = 1)
+            lnTP2   := line.new(lastSigBar, lastTP2,    lastSigBar, lastTP2,    xloc = xloc.bar_index, extend = extend.right, color = color.new(tpCol, 0), style = line.style_dotted, width = 1)
+            lblEntry := label.new(lastSigBar, lastEntry, "ENTRY " + str.tostring(lastEntry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
+            lblSL    := label.new(lastSigBar, lastSL,    "SL "    + str.tostring(lastSL, format.mintick),    xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+            lblTP1   := label.new(lastSigBar, lastTP1,   "TP1 "   + str.tostring(lastTP1, format.mintick),   xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = tpCol, size = size.small)
+            lblTP2   := label.new(lastSigBar, lastTP2,   "TP2 "   + str.tostring(lastTP2, format.mintick),   xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = tpCol, size = size.small)

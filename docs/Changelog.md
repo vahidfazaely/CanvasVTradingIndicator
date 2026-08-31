@@ -2,6 +2,35 @@
 
 All notable changes to CanvasV MTF Signal.
 
+## v4.1.0 — V4 FAST: NORMAL/DEBUG visual mode + SL post-exit diagnostics
+
+Date: 2026-08-27
+
+**Presentation/diagnostics release. Trading logic is identical to v4.0.0.** The signal engine (REGIME → DIRECTION → SETUP → TRIGGER → ENTRY QUALITY → RISK → POSITION), every threshold, the structural SL / 0.5 ATR buffer / 1.5 ATR fallback / 0.5–2.5 ATR risk bounds / R-based TP1/TP2 model, position tracking, and repaint safety are unchanged.
+
+- **New `Visual Mode` input (default NORMAL) — presentation only.** NORMAL = clean SuperTrend-style chart: a single trend line (direction EMA colored green/red by regime state), ▲/▼ markers, and a compact 9-row panel (CANVASV V4 / TIMEFRAME / TREND BULLISH-BEARISH / SIGNAL BUY-SELL-WAIT / POSITION LONG-SHORT-FLAT / ENTRY / SL / TP1 / TP2). The three EMA plots, the decisions log, and the research panels are hidden. DEBUG = full EMA set, the complete research panel, the decisions log, a per-signal record label at every entry, and the post-SL observation.
+- **Per-signal DEBUG record label** at each entry: direction, trigger type (PULLBACK RESUME / BREAKOUT), entry, EMA21, extension in ATR, candle body %, ATR, structural SL, final SL, risk in ATR, TP1, TP2, RR 1/2. Annotated on resolution with outcome, final R, age in bars, MFE, MAE.
+- **Post-SL observation window** (new `Post-SL observation window` input, default 10 bars): after an `SL FIRST` exit, tracks the max favorable excursion in R over the next N confirmed bars — "did price actually move our way after the stop was hit?". Reported as a `POST-SL MFE +X.XXR over Nb` decisions-log line, a label at the exit bar (DEBUG), and a `V4POST|` alert. Diagnostic only — never feeds back into signal logic.
+- **Repaint safety verified:** signals remain confirmed-bar-only (`barstate.isconfirmed`); zero `request.security`; zero `lookahead_on`; the observation window and all new labels update only on confirmed bars.
+
+## v4.0.0 — V4 FAST engine: Phase 1 core prototype (new file, V3 frozen)
+
+Date: 2026-08-17
+
+**New product line, new file — `TradingView/CanvasV_V4_FAST.pine`.** V3 (`TradingView/MyBuySellIndicator.pine`) is frozen as the immutable legacy baseline at commit `16d6e9e`, tag `v3.4.4-legacy`. V4 is a fast-trade engine for 15m-first trading; V3 is untouched and remains the reference/rollback version.
+
+- **Architecture:** `REGIME → DIRECTION → SETUP → TRIGGER → RISK → POSITION`. Chart-TF series only — **zero `request.security` calls**, so 1H/4H are context by design and the repaint surface is minimal.
+- **Regime:** transparent trend/range classifier (slow-EMA slope in ATR/bar) + volatility state (ATR vs its own average).
+- **Direction/momentum:** EMA9/21/50; setup = regime + direction + momentum agreement (a standing state, never a signal by itself).
+- **Triggers (events on confirmed bars):** pullback-resume (touch of direction EMA then reclaim of trigger EMA) and breakout (close beyond prior N-bar extreme).
+- **Extension guard (the new entry-quality hard gate):** |close − direction EMA| / ATR ≤ 2.5.
+- **Risk model reused unchanged from V3:** structural SL (`lowest/highest(10)[1] ± 0.5 ATR`), ATR fallback (1.5 ATR), min/max risk bounds (0.5/2.5 ATR), R-based TP1/TP2 (1R/2.5R).
+- **Position state (promoted to core):** FLAT/LONG/SHORT with entry, SL, TP1, TP2, live R, age, MFE/MAE; exits via SL / TP1 / TP2 / expiry / opposite-signal supersede.
+- **UI:** compact reason-based panel (TIMEFRAME / REGIME / SETUP / TRIGGER / SIGNAL / REASON / ENTRY / SL / TP1 / TP2 / RISK-RR / POSITION) + BUY/SELL markers + level lines + one compact DECISIONS log.
+- **Measurement:** candidates / entries / outcome counters, bounded decisions log, optional `V4LOG|`/`V4OUT|` alerts.
+- **Anti-repaint:** confirmed-bar only (`barstate.isconfirmed`); no `lookahead_on`; no `datetime`/`format.timestamp`; manual time composition.
+- **Deliberately UNTUNED:** every parameter is configurable; defaults are hypotheses from the Phase 0 audit and must not be optimized until trade data is collected. No ML, no SMC, no trailing stop, no 1D/5m, no giant diagnostics.
+
 ## v3.4.4 — Signal Sensitivity presets (15m frequency tuning)
 
 Date: 2026-08-17
@@ -11,10 +40,10 @@ Date: 2026-08-17
 - **Conservative** — every effective threshold equals the configured input (v3.4.3 exactly).
 - **Balanced** — 4H flat slope allowed (`>=`); 1H structure/momentum 0.5% tolerance; candle body 50→40%; ADX floor −3 (18→15); chase distance 1.5→2.0 ATR; volatility floor 0.05→0.04%.
 - **Aggressive** — additionally drops the 4H-slope gate requirement (4H direction + separation still required); 1H tolerance 1%; body 30%; ADX −6 (18→12); chase 2.5 ATR; vol floor 0.03%.
-- **Never relaxed by any preset:** 4H direction (EMA50/200), 4H separation, entry structure / gap expansion, optional filters, minimum score (75), structural SL, max-risk gate, TP/RR, repaint protection, all `request.security` calls, alerts, resolution, MT5. Presets only relax — they never tighten below user-configured values.
+- **Never relaxed by any preset:** 4H direction (EMA50/200), 4H separation, entry structure / gap expansion, optional filters, minimum score (75), structural SL, max-risk gate, TP/RR, repaint protection, all `request.security` calls, alerts, resolution. Presets only relax — they never tighten below user-configured values.
 - **STRONG tier stays meaningful:** the score keeps the STRICT 4H slope, so flat / un-gated-slope setups score 75 and print as regular BUY/SELL; 100/STRONG still requires a genuinely rising/falling 4H plus full alignment.
 - **Diagnostics:** architecture unchanged — the DIAGNOSTIC STATS table shows which filter limits frequency under the active preset; audit/decision rows display the effective ADX floor and strict slope points.
-- **Unchanged (proven):** with Sensitivity = Conservative every new expression reduces algebraically to the v3.4.3 formulas; SL/TP/risk/score/gates/alerts/repaint/MT5 untouched.
+- **Unchanged (proven):** with Sensitivity = Conservative every new expression reduces algebraically to the v3.4.3 formulas; SL/TP/risk/score/gates/alerts/repaint untouched.
 
 ## v3.4.3 — Performance: event-driven debug tables
 
@@ -25,7 +54,7 @@ Date: 2026-08-17
 - **Fixes the "Heavy script" runtime warning.** With the Signal Decision Logger / Signal Audit Mode on, all debug tables (SIGNAL AUDIT 32 rows, DECISION LOG 29, GATE STATUS 17, DIAGNOSTIC STATS 27, RECENT DECISIONS) were rebuilt on every tick — roughly 250 `table.cell` calls plus ~50 formatted strings per bar across the full history.
 - **Event-driven redraw:** the snapshot-based tables now rebuild only on confirmed bars where a candidate was evaluated, a signal resolved (SL/TP/expiry/supersede), or the last bar — a `dbgRev` change counter gates the rebuild, and the table content is identical (it was already frozen event snapshots + cumulative counters). The live **TRACK / HITS / OUTCOME** rows still update every closed bar, so MFE/MAE stay current while a signal is being tracked.
 - **Audit display strings moved** into the gated block — previously they were computed on every bar even with Signal Audit Mode off.
-- **Unchanged (byte-verified vs v3.4.2):** every gate, score formula and threshold, `buySig`/`sellSig`, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all `request.security` calls (`lookahead_off`), repaint methodology, `alertcondition`s, trading alerts, CVLOG/CVOUT diagnostics, and MT5. The diff touches only table-presentation code, moved display strings, and the version string.
+- **Unchanged (byte-verified vs v3.4.2):** every gate, score formula and threshold, `buySig`/`sellSig`, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all `request.security` calls (`lookahead_off`), repaint methodology, `alertcondition`s, trading alerts, CVLOG/CVOUT diagnostics. The diff touches only table-presentation code, moved display strings, and the version string.
 
 ## v3.4.2 — Workflow: CVOUT resolution alerts + CVLOG time fields
 
@@ -36,7 +65,7 @@ Date: 2026-08-17
 - **CVOUT resolution alerts:** every resolved signal (`SL FIRST` / `TP1 FIRST` / `TP2 FIRST` / `AMBIGUOUS` / `EXPIRED` / `SUPERSEDED`) now emits a machine-readable `CVOUT|...` alert line via the same `alert()` mechanism and the same `Enable diagnostic CVLOG alerts` toggle. It carries the outcome, resolution bars/time, MFE/MAE in R, final R, H4 and 1H state at the resolution candle, `ALIGNMENT INTACT/BROKEN`, Entry/SL/TP1/TP2, and the signal bar time — so outcomes can be collected as text instead of on-chart screenshots.
 - **CVLOG time field:** signal-time CVLOG lines now include `|T=<bar time>` so each CVOUT can be joined back to its originating CVLOG.
 - **Workflow helpers (repo only, not in Pine):** `scripts/copy-pine-to-clipboard.bat` (one-click copy of the Pine source for pasting into the Pine Editor) and `scripts/append-clipboard-to-log.bat` (appends copied CVLOG/CVOUT lines to `logs/cvlog.txt`); `logs/README.md` documents the format and the collection procedure.
-- **Unchanged (byte-verified vs v3.4.1):** every gate, score formula and threshold, `buySig`/`sellSig`, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all `request.security` calls (`lookahead_off`), repaint methodology, `alertcondition`s, trading alerts, and MT5. The only Pine changes are the version string, two extended alert-message strings, and three diagnostic alert emissions (one per resolution site).
+- **Unchanged (byte-verified vs v3.4.1):** every gate, score formula and threshold, `buySig`/`sellSig`, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all `request.security` calls (`lookahead_off`), repaint methodology, `alertcondition`s, and trading alerts. The only Pine changes are the version string, two extended alert-message strings, and three diagnostic alert emissions (one per resolution site).
 
 ## v3.4.1 — Observability: signal-decision context fields (Phase 4A)
 
@@ -52,7 +81,7 @@ Date: 2026-08-17
 - **Signal spacing:** bars/minutes since the previous logged signal (`N/A` for the first; tracked while the logger is on). No cooldown added.
 - **Resolution context:** every resolved signal records outcome bars + elapsed minutes, the H4 and 1H state at the resolution candle, ADX at resolution, and `ALIGNMENT INTACT/BROKEN` (whether 4H + 1H were still aligned with the trade). Strictly post-hoc — never feeds back into the signal decision. Outcome categories are unchanged (`SL FIRST / TP1 FIRST / TP2 FIRST / AMBIGUOUS / EXPIRED / SUPERSEDED`).
 - **Logger UI:** `— DECISION LOG —` gains `— CONTEXT —` (H4 SLOPE, H4 SEP, H4 EMA DIST, ATR REGIME, 1H AGE, SINCE SIG) and `— RESOLUTION —` (RESOLUTION, H4 EXIT, 1H EXIT, ALIGNMENT with green INTACT / red BROKEN) sections. `— DIAGNOSTIC STATS —` gains candidate averages (AVG SCORE, AVG H4 SLOPE, AVG H4 SEP, AVG H4 DIST, AVG ATR, AVG 1H AGE, AVG RES) and an `OUTCOMES` count row (`SL · TP1 · TP2 · AMB · EXP · SUP`). Normal chart and panel are untouched; all new output lives in debug mode.
-- **Unchanged (byte-verified vs v3.4.0):** `buySig`/`sellSig`, every gate, score formulas and thresholds, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all 7 `request.security` calls (`lookahead_off`), repaint protection, frozen signal state, outcome classification, trading alerts, `alertcondition`s, and every Pine build-compatibility constraint. MT5 code untouched. Not a backtest — data collection only.
+- **Unchanged (byte-verified vs v3.4.0):** `buySig`/`sellSig`, every gate, score formulas and thresholds, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all 7 `request.security` calls (`lookahead_off`), repaint protection, frozen signal state, outcome classification, trading alerts, `alertcondition`s, and every Pine build-compatibility constraint. Not a backtest — data collection only.
 
 ## v3.4.0 — UI/UX cleanup: simplified color system + compact panel
 
@@ -69,7 +98,7 @@ Date: 2026-08-17
 - **Compact panel (18 → 11 rows):** new hierarchy — title + version, **TREND** (green/red/silver), **SIGNAL** (large, green/red/silver), SCORE (always neutral), ENTRY (white), SL (red), TP1/TP2 (directional), RISK, R:R, then **one context footer line** — `15M SIGNAL · 1H BULLISH · ADX 35.8` with `ENABLED`/`DISABLED` status. The separate TIMEFRAME / STATUS / REASON / MARKET / LAST SIGNAL rows were folded away; on a blocked timeframe or config error the footer turns red and shows the reason (`5M · SIGNALS DISABLED · Use 15m / 1H / 4H`). No blank rows are wasted on normal charts.
 - **Debug tables (Audit Mode / Signal Decision Logger) unchanged in content**, colors unified to PASS = green, FAIL = red, N/A / context = silver, primary values = white. All diagnostic functionality (first-failure chain, GATE STATUS, DIAGNOSTIC STATS, RECENT DECISIONS, DECISION LOG, outcome tracking, CVLOG alerts) is fully preserved and remains hidden when the modes are off.
 - **Score is never colored by range** — always neutral, per the cleanup spec.
-- **Unchanged (byte-verified vs v3.3.0):** `buySig`/`sellSig`, all Phase 1 gates, score formulas and thresholds, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all 7 `request.security` calls (`lookahead_off`), repaint protection, frozen last-signal state, outcome tracking, alert logic, `alertcondition`s, and every Pine build-compatibility constraint. MT5 code untouched. This is a presentation-only release — no trading behavior changed.
+- **Unchanged (byte-verified vs v3.3.0):** `buySig`/`sellSig`, all Phase 1 gates, score formulas and thresholds, STRONG logic, the Phase 2 position engine (structural SL, ATR fallback, max-risk gate, R-based TPs, R:R), TF policy, `barstate.isconfirmed`, all 7 `request.security` calls (`lookahead_off`), repaint protection, frozen last-signal state, outcome tracking, alert logic, `alertcondition`s, and every Pine build-compatibility constraint. This is a presentation-only release — no trading behavior changed.
 
 Date: 2026-08-17
 
@@ -79,7 +108,7 @@ Date: 2026-08-17
 - **`— GATE STATUS —` table:** PASS / FAIL / N/A per gate (4H REGIME, 4H SLOPE, 4H SEPARATION, 1H STRUCTURE, 1H MOMENTUM, ENTRY STRUCTURE, ENTRY POSITION, EMA EXPANSION, TRIGGER, CANDLE, ADX, VOLATILITY, CHASING, RISK, SCORE) + DECISION row, from frozen per-gate snapshot booleans.
 - **`— DIAGNOSTIC STATS —` table:** CANDIDATES / SIGNALS / REJECTED plus per-reason rejection counts (4H REGIME, 4H SLOPE, 4H SEPARATION, 1H STRUCTURE, 1H MOMENTUM, ENTRY STRUCTURE, ENTRY POSITION, EMA EXPANSION, CANDLE, ADX, VOLATILITY, CHASING, RISK, SCORE, OPTIONAL FILTERS) — answers *which filter kills the most setups*. Observation only; no filter changes.
 - **Default `Diagnostic history size` changed 50 → 20** (bounded event log, newest kept; matches the compact `RECENT DECISIONS` summary header rename).
-- **Unchanged (byte-verified vs v3.2.0):** `buySig`/`sellSig`, score formulas and thresholds, every Phase 1 gate, the Phase 2 position engine (structural SL, risk gate, R-based TPs), TF policy, trading alerts, `alertcondition`s, HTF methodology, repaint protection, and all Pine build-compatibility constraints (including the `ta.lowest`/`ta.highest` fix). MT5 code untouched. Still **not a backtest** — no `strategy()`, no orders, no P&L, no profitability claim.
+- **Unchanged (byte-verified vs v3.2.0):** `buySig`/`sellSig`, score formulas and thresholds, every Phase 1 gate, the Phase 2 position engine (structural SL, risk gate, R-based TPs), TF policy, trading alerts, `alertcondition`s, HTF methodology, repaint protection, and all Pine build-compatibility constraints (including the `ta.lowest`/`ta.highest` fix). Still **not a backtest** — no `strategy()`, no orders, no P&L, no profitability claim.
 
 - The target Pine build does not provide the bare `lowest()` / `highest()` functions (`Could not find function or function reference 'lowest'`). The Phase 2 structural-SL swing is now computed with the namespaced `ta.lowest(low, swingLookback)[1]` / `ta.highest(high, swingLookback)[1]` — identical values, zero logic change (same pattern as the earlier `abs()` → `math.abs()` fix).
 
@@ -96,7 +125,7 @@ Date: 2026-08-17
 - **CVLOG export alert.** Optional `Enable diagnostic CVLOG alerts` emits a compact machine-readable line per event (`CVLOG|SYM|TF|DIR|RESULT|SCORE|REASON|ADX=..|ATR=..|RISK=..A|RR=../..|E=..|SL=..|TP1=..|TP2=..`), clearly separate from the trading alerts (own default-off input; the two trading `alert()` calls and the four `alertcondition`s are unchanged).
 - **Repaint / data integrity:** events are captured only at `barstate.isconfirmed` on supported timeframes; the H4/1H `request.security(..., lookahead_off)` methodology is untouched; outcome tracking inspects only candles **after** the signal bar and never feeds back into the signal decision (SIGNAL DECISION vs OUTCOME TRACKING separation). No `lookahead_on`, no future references in signal calculations.
 - **Pine limitation documented:** Pine cannot write files to disk, so persistence is bounded in-script arrays + optional alerts; historical events rebuild deterministically on reload (replayed from the same confirmed data). This is a **data-collection tool, not a backtest** — no `strategy()`, no orders, no P&L, no profitability claim.
-- **Unchanged (byte-verified vs v3.1.0):** `buySig`/`sellSig`, score model and thresholds, all Phase 1 gates, the Phase 2 position engine (structural SL, risk gate, R-based TPs), TF policy (15m/1H/4H only), trading alerts, `alertcondition`s, HTF methodology, repaint protection, and all Pine build-compatibility constraints. MT5 code untouched.
+- **Unchanged (byte-verified vs v3.1.0):** `buySig`/`sellSig`, score model and thresholds, all Phase 1 gates, the Phase 2 position engine (structural SL, risk gate, R-based TPs), TF policy (15m/1H/4H only), trading alerts, `alertcondition`s, HTF methodology, repaint protection, and all Pine build-compatibility constraints.
 
 ## v3.1.0 — Phase 2: structural risk & R-based position engine
 
@@ -111,7 +140,7 @@ Date: 2026-08-17
 - **Panel:** two new compact rows under TP2 — `RISK` (in ATR) and `R:R` (`1.0 / 2.5`). No other layout change.
 - **Audit Mode:** new rows `STRUCT SL`, `FINAL SL`, `SL MODE` (`STRUCTURAL` / `ATR FALLBACK`), `RISK`, `RISK ATR`, `TP1 R`, `TP2 R`, `R:R`. Rejection reasons extended: `ATR INVALID`, `RISK TOO LARGE`, `INVALID STRUCTURE` (first-failed-gate order preserved).
 - **Config validation:** new `riskCfgOk` — signals suppressed when `Swing lookback < 2`, `Structure buffer < 0`, `Minimum risk ≤ 0`, `Maximum risk ≤ Minimum risk`, `TP1 R ≤ 0`, or `TP2 R ≤ TP1 R` (panel reason `risk config invalid`).
-- **Unchanged:** ALL Phase 1 signal gates (4H regime, 1H confirmation, 1H momentum, entry structure, candle quality, ADX, volatility floor, chasing) — byte-identical; the score model and thresholds; the TF policy (15m/1H/4H only); HTF `request.security` methodology (7 single-line calls, `lookahead_off`); `barstate.isconfirmed` gating; alerts (once per confirmed signal, downstream of the final valid signal); repaint protection; all Pine build-compatibility constraints. MT5 code untouched.
+- **Unchanged:** ALL Phase 1 signal gates (4H regime, 1H confirmation, 1H momentum, entry structure, candle quality, ADX, volatility floor, chasing) — byte-identical; the score model and thresholds; the TF policy (15m/1H/4H only); HTF `request.security` methodology (7 single-line calls, `lookahead_off`); `barstate.isconfirmed` gating; alerts (once per confirmed signal, downstream of the final valid signal); repaint protection; all Pine build-compatibility constraints.
 - **No profitability claim** — the effect of structural stops vs ATR stops requires backtesting.
 
 ## v2.5.0 — Phase 1 of Signal Engine v3: quality gates
@@ -141,7 +170,7 @@ Date: 2026-08-17
 - **Panel:** `STATUS` now reads `SIGNAL ENGINE ENABLED` (green) on supported charts and `SIGNALS DISABLED` (red) on all others, with a new `REASON` row showing `Use 15m / 1H / 4H` on unsupported charts.
 - **Signal Audit Mode** now renders on any chart: it always shows `SIGNAL TF` (15M/1H/4H or the chart TF) and `SIGNAL MODE` (ENABLED/DISABLED, with the reason on blocked charts). On supported timeframes it keeps the full detail rows (4H trend/slope, 1H conf, entry trigger, ADX, score breakdown, ATR levels, signal bar) with a dynamic entry label and `CONFIRMED YES - closed candle`.
 - **Alerts** inherit the gate: `buySig`/`sellSig` require `isSupportedSignalTF`, so blocked timeframes can never fire the `alert()` calls or the `alertcondition`s.
-- **Preserved:** scoring formulas, ATR Entry/SL/TP1/TP2 (1.5/1.5/3.0), ADX/EMA calculations, the four single-line `request.security` H4 calls + two single-line 1H calls (all `lookahead_off`), closed-candle discipline, config validation, and all Pine build-compatibility constraints. MT5 code untouched.
+- **Preserved:** scoring formulas, ATR Entry/SL/TP1/TP2 (1.5/1.5/3.0), ADX/EMA calculations, the four single-line `request.security` H4 calls + two single-line 1H calls (all `lookahead_off`), closed-candle discipline, config validation, and all Pine build-compatibility constraints.
 - **Build compatibility fix:** the audit snapshot `audBarTime` was declared with the `datetime` type keyword, which the target Pine build rejects (`'datetime' is not a valid type keyword`). Timestamps are plain `int` in Pine, so it is now `var int audBarTime = na` — same value (`time`), same display, no logic change.
 - **Build compatibility fix (2):** the audit table used the `format.timestamp` constant (undeclared on the target build) and an explicit `end` keyword (also unsupported — the build delimits `if` blocks purely by indentation). The BAR row now formats via `str.tostring(audBarTime, "yyyy-MM-dd HH:mm")`, and the audit detail block was restructured from a nested `if isSupportedSignalTF ... end` into a separate top-level `if auditMode and isSupportedSignalTF` block closed by dedent — identical rendered output, zero logic change.
 
@@ -156,7 +185,7 @@ Date: 2026-08-17
 - **Panel:** new `TIMEFRAME` (M15 ENTRY / 1H CONFIRMATION / 4H TREND / chart TF) and `STATUS` (ENTRY ACTIVE / CONTEXT - NO ENTRIES / ENTRY SIGNALS DISABLED - M15 ONLY) rows; the MOMENTUM row is now `1H CONF`.
 - **Signal Audit Mode** now renders on 15M charts only and shows the three layers explicitly (4H TREND, 1H CONF, M15 ENTRY) with the exact snapshotted values and contributions.
 - **Config validation** extended: `1H EMA Fast < 1H EMA Slow` is now also enforced (`EMA fast >= slow`).
-- **Preserved:** closed-candle discipline (`barstate.isconfirmed`), the 4H/1H `lookahead_off` methodology (all `request.security` calls remain single-line), ATR Entry/SL/TP1/TP2 formulas (1.5/1.5/3.0), ADX/ATR periods, alerts, repaint protection, and all Pine build-compatibility constraints. MT5 code untouched.
+- **Preserved:** closed-candle discipline (`barstate.isconfirmed`), the 4H/1H `lookahead_off` methodology (all `request.security` calls remain single-line), ATR Entry/SL/TP1/TP2 formulas (1.5/1.5/3.0), ADX/ATR periods, alerts, repaint protection, and all Pine build-compatibility constraints.
 
 ## v2.2.0 — Signal Audit Mode (debug/diagnostic)
 
@@ -194,7 +223,7 @@ Date: 2026-08-17
 - Renamed the TradingView indicator's public/display name from "My Buy/Sell Scalper - MTF" to **CanvasV MTF Signal**.
 - Updated: `indicator()` title and shorttitle, the on-chart info panel title, the four `alertcondition` titles/messages, and the script header comment.
 - Renamed README, `docs/Strategy.md`, and `docs/Testing.md` headings.
-- **No logic, architecture, or hardening changes.** File paths unchanged (`TradingView/MyBuySellIndicator.pine`, `MT5/MyBuySellIndicator.mq5`) — repository/file renaming is handled in a separate phase. MT5 code untouched (its on-chart name still shows the old title until the MT5 naming phase).
+- **No logic, architecture, or hardening changes.** File paths unchanged (`TradingView/MyBuySellIndicator.pine`).
 
 ## v2.0.1 (hardening) — TradingView MTF confirmation + repaint safety
 
@@ -222,17 +251,8 @@ Date: initial repository commit
 - Four alert types (BUY / STRONG BUY / SELL / STRONG SELL) with full details, once per confirmed signal.
 - Pine compatibility fixes for the target build: `ta.adx` → `ta.dmi`, labels via `label.new` (no `line.new text=`), no `table.label_font_family_monospace`, `na()`/`not na()` checks only, no tuple-from-`if` assignment.
 
-## v1.0.0 — TradingView port (M15-locked)
+## v1.0.0 — Pine Script
 
-- First Pine port of the MT5 Phase 2 logic (M15-attached).
+- First Pine port of the signal logic.
 - Fixed compilation for the target Pine build: `ta.adx` → `ta.dmi`, level labels via `label.new`, removed table font-family argument, `not na()` checks, guarded object deletion.
 - Closed-candle discipline via `barstate.isconfirmed` and `lookahead_off`.
-
-## MT5 history
-
-### v2.00 — Phase 2 (M15)
-- ATR-based Entry/SL/TP1/TP2 (1.5 / 1.5 / 3.0), ADX filter (period 14, min 20), H4 EMA 50 slope filter.
-- 0–100 signal score (minimum 75), latest-signal SL/TP visuals, upper-right info panel, alert system, input groups.
-
-### v1.00 (hardened) — Phase 1
-- Enforced M15 timeframe, input validation, fixed M15 `CopyBuffer` bounds (no phantom signals), implemented the previously dead `EnableAlerts` input (once per new closed signal, no historical alerts).
