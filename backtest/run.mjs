@@ -121,8 +121,3 @@ const exportData = {
 const jsonFile = path.join(OUTPUT_DIR, `${symbol}-${tf}-results.json`);
 fs.writeFileSync(jsonFile, JSON.stringify(exportData, null, 2));
 console.log(`\nExported results to ${jsonFile}`);
-
-// Generate HTML viewer
-const htmlFile = path.join(OUTPUT_DIR, `${symbol}-${tf}-viewer.html`);
-generateViewer(exportData, htmlFile);
-console.log(`Generated viewer at ${htmlFile}`);

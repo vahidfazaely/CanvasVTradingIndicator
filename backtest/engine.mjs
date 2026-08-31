@@ -34,11 +34,11 @@ export const DEFAULT_PARAMS = {
   swingLookback: 10,
   structBufferAtr: 0.5,
   minRiskAtr: 0.5,
-  maxRiskAtr: 2.5,
+  maxRiskAtr: 4.0,
   tp1R: 1.0,
   tp2R: 2.5,
   atrFallbackMult: 1.5,
-  atrStopMult: 0.0,
+  atrStopMult: 1.5,
 
   // Position
   enableMidTradeBE: false,
