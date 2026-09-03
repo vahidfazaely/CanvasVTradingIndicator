@@ -40,6 +40,32 @@ export const DEFAULT_PARAMS = {
   atrFallbackMult: 1.5,
   atrStopMult: 1.5,
 
+  // Position Sizing (Phase 2)
+  enableFixedRisk: true,
+  riskPerTrade: 0.5,
+  maxPosSize: 0,
+
+  // Breakout Quality (Phase 3)
+  enableBtBuffer: true,
+  breakoutBuffer: 0.10,
+  enableCloseLoc: true,
+  closeLocMinLong: 0.70,
+  closeLocMinShort: 0.30,
+  enableBtExtFilter: true,
+  breakoutExtAtr: 2.0,
+
+  // Volume (Phase 4)
+  enableRelVol: true,
+  volLookback: 20,
+  volMinBreakout: 1.20,
+  volMinPullback: 1.10,
+
+  // High-Volatility (Phase 5)
+  hvMode: "Stronger Confirmation",
+  hvVolMin: 1.40,
+  hvCloseLocLong: 0.75,
+  hvCloseLocShort: 0.25,
+
   // Position
   enableMidTradeBE: false,
   beBarThreshold: 10,
@@ -68,14 +94,20 @@ export function calcEMA(data, period) {
   return ema;
 }
 
-// SMA
+// SMA — NaN-robust, matches Pine ta.sma behavior on series with leading NaN warmup
+// (e.g. calcATR yields NaN for the first `period-1` bars). NaN inputs are skipped;
+// output stays NaN until the trailing window holds `period` valid values.
 export function calcSMA(data, period) {
   const sma = new Float64Array(data.length);
-  let sum = 0;
+  let sum = 0, valid = 0;
   for (let i = 0; i < data.length; i++) {
-    sum += data[i];
-    if (i >= period) sum -= data[i - period];
-    sma[i] = i >= period - 1 ? sum / period : NaN;
+    const v = data[i];
+    if (!isNaN(v)) { sum += v; valid++; }
+    if (i >= period) {
+      const old = data[i - period];
+      if (!isNaN(old)) { sum -= old; valid--; }
+    }
+    sma[i] = valid === period ? sum / period : NaN;
   }
   return sma;
 }
@@ -149,9 +181,31 @@ export function rollingHigh(data, period) {
 
 // ─── Signal engine ────────────────────────────────────────────────
 
-export function runEngine(candles, params = DEFAULT_PARAMS) {
+export function runEngine(candles, params = DEFAULT_PARAMS, opts = {}) {
   const p = { ...DEFAULT_PARAMS, ...params };
   const len = candles.length;
+  const audit = !!opts.audit; // when true, per-bar funnel/stage booleans are collected
+  // AUDIT EXPERIMENTS (opt-in, default OFF — production/parity behavior unchanged):
+  //   Pullback entry policy, one of:
+  //     "reclaim"  (default) — entry only on the EMA9 close-reclaim after an EMA21 touch.
+  //     "firstDip" — any qualifying dip bar (opts.experimentEarlyPullback = true). Entry at
+  //                  the first bar of a touch window: setup up, close <= EMA9, not
+  //                  free-falling more than 1.5 ATR below EMA21.
+  //     "slowDip"  (opts.experimentSlowDipEarly = true) — like firstDip but only after the
+  //                  dip has already based minBars (opts.slowDipMinBars, default 2)
+  //                  consecutive bars on the dip side of EMA9 (a slow EMA21 base, not a
+  //                  one-bar dip). This is the Variant-B experiment from the quality/latency
+  //                  audit. All three modes are causal per-bar and default OFF.
+  const entryMode = opts.experimentSlowDipEarly ? "slowDip"
+    : opts.experimentEarlyPullback ? "firstDip"
+    : "reclaim";
+  const slowDipMinBars = Math.max(1, opts.slowDipMinBars ?? 2);
+  // Direction restriction for early entry (engine experiments only): 'both' (default),
+  // 'long' or 'short'. Justified by the R1 forensics: dip SHORT entries are net positive
+  // on all three symbols while dip LONG entries are negative on SOL.
+  const earlySide = opts.experimentEarlySide ?? "both";
+  const earlySideUpOk = earlySide === "both" || earlySide === "long";
+  const earlySideDnOk = earlySide === "both" || earlySide === "short";
 
   // Extract arrays
   const opens = candles.map(c => c.open);
@@ -166,6 +220,10 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
   const atr = calcATR(candles, p.atrPeriod);
   const atrAvg = calcSMA(atr, p.atrRegimeLen);
 
+  // Volume (Phase 4)
+  const volumes = candles.map(c => c.volume || 0);
+  const volMA = calcSMA(volumes, p.volLookback);
+
   // Pre-compute rolling extremes (need [1] shift = previous bar's value)
   const swingLow = rollingLow(lows, p.swingLookback);
   const swingHigh = rollingHigh(highs, p.swingLookback);
@@ -176,6 +234,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
 
   const signals = [];
   const trades = [];
+  const auditRows = audit ? [] : null;
 
   // Position state
   let posState = 0; // 1=LONG, -1=SHORT, 0=FLAT
@@ -184,9 +243,26 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
   let posBar = -1, posAge = 0;
   let posMFE = 0, posMAE = 0;
   let posDir = "";
+  let posHighVol = false;
   let posExtAtr = 0, posBodyPct = 0, posEma21 = 0, posAtrVal = 0;
   let posStructSL = 0, posRR1 = 0, posRR2 = 0;
   let posTrigger = "";
+  let dipAgeUp = 0; // consecutive bars closed on the dip side of EMA9 (close <= EMA9)
+  let dipAgeDn = 0; // consecutive bars closed on the dip side of EMA9 (close >= EMA9)
+  let runLowUp = Infinity;   // lowest low of the current BUY dip run (early-entry pierce guard)
+  let runHighDn = -Infinity; // highest high of the current SELL dip run
+  // Optional coarse constraints for the slowDip early mode (engine experiments only):
+  //   slowDipMinPierceAtr — dip anchor must not sit more than X ATR below EMA21 at entry (default: unbounded).
+  //   slowDipMaxAtrVs — entry bar ATR must not exceed X% of its 100-bar average (default: unbounded).
+  const minPierce = opts.slowDipMinPierceAtr ?? -Infinity;
+  const maxAtrVs = opts.slowDipMaxAtrVs ?? Infinity;
+  // R1-residual guards (engine experiments only):
+  //   slowDipMaxBodyAtr — entry-candle body must be <= X ATR (small-body entries win more,
+  //                       cross-symbol consistent in the R1 forensics).
+  //   slowDipMinCloseDir — entry candle must close >= X toward the trade side of its range
+  //                        (0..1; direction-signed).
+  const maxBodyAtr = opts.slowDipMaxBodyAtr ?? Infinity;
+  const minCloseDir = opts.slowDipMinCloseDir ?? -1;
 
   for (let i = 0; i < len; i++) {
     const c = candles[i];
@@ -215,6 +291,10 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
     const setupUp = trendUp && momUp;
     const setupDn = trendDn && momDn;
 
+    // Dip-age episode counters + run anchors (causal; used by early-pullback entry modes only)
+    if (c.close > emaTrig[i]) { dipAgeUp = 0; runLowUp = Infinity; } else { dipAgeUp++; runLowUp = Math.min(runLowUp, c.low); }
+    if (c.close < emaTrig[i]) { dipAgeDn = 0; runHighDn = -Infinity; } else { dipAgeDn++; runHighDn = Math.max(runHighDn, c.high); }
+
     // ─── Triggers ───
     const pullbackTol = p.pullbackTolPct / 100.0;
 
@@ -225,18 +305,34 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
     const reclaimUp = c.close > emaTrig[i] && candles[i - 1].close <= emaTrig[i - 1];
     const reclaimDn = c.close < emaTrig[i] && candles[i - 1].close >= emaTrig[i - 1];
 
-    const pullbackUp = p.enablePullback && touchLowUp && reclaimUp;
-    const pullbackDn = p.enablePullback && touchHighDn && reclaimDn;
+    // Early-pullback relaxation (audit experiments only, see entryMode above)
+    const wantEarly = entryMode !== "reclaim";
+    const baseAgeOkUp = entryMode === "slowDip" ? dipAgeUp >= slowDipMinBars : true;
+    const baseAgeOkDn = entryMode === "slowDip" ? dipAgeDn >= slowDipMinBars : true;
+    const pierceOkUp = (runLowUp - emaDir[i]) / Math.max(atrVal, 1e-10) >= minPierce;
+    const pierceOkDn = (emaDir[i] - runHighDn) / Math.max(atrVal, 1e-10) >= minPierce;
+    const atrVsOkUp = atrVsAvg <= maxAtrVs;
+    const atrVsOkDn = atrVsAvg <= maxAtrVs;
+    // R1-residual guards (causal, inline so they precede the closeLoc computation)
+    const bodyAtrNow = c.high - c.low > 0 ? Math.abs(c.close - c.open) / Math.max(atrVal, 1e-10) : 0;
+    const closeDirNow = c.high - c.low > 0 ? (c.close - c.low) / (c.high - c.low) : 0.5;
+    const earlyBodyOkUp = bodyAtrNow <= maxBodyAtr;
+    const earlyBodyOkDn = bodyAtrNow <= maxBodyAtr;
+    const closeDirOkUp = closeDirNow >= minCloseDir;
+    const closeDirOkDn = (1 - closeDirNow) >= minCloseDir;
+    const earlyPbUp = wantEarly && earlySideUpOk && touchLowUp && !reclaimUp && baseAgeOkUp
+      && c.close <= emaTrig[i] && (emaDir[i] - c.close) <= 1.5 * atrVal
+      && pierceOkUp && atrVsOkUp && earlyBodyOkUp && closeDirOkUp;
+    const earlyPbDn = wantEarly && earlySideDnOk && touchHighDn && !reclaimDn && baseAgeOkDn
+      && c.close >= emaTrig[i] && (c.close - emaDir[i]) <= 1.5 * atrVal
+      && pierceOkDn && atrVsOkDn && earlyBodyOkDn && closeDirOkDn;
+    const pullbackUp = p.enablePullback && ((touchLowUp && reclaimUp) || earlyPbUp);
+    const pullbackDn = p.enablePullback && ((touchHighDn && reclaimDn) || earlyPbDn);
 
-    const breakUp = p.enableBreakout && !isNaN(highestHighBO[i - 1]) && c.close > highestHighBO[i - 1];
-    const breakDn = p.enableBreakout && !isNaN(lowestLowBO[i - 1]) && c.close < lowestLowBO[i - 1];
-
-    const triggerUp = pullbackUp || breakUp;
-    const triggerDn = pullbackDn || breakDn;
-
-    // ─── Entry quality ───
+    // ─── Entry quality (computed first — used by breakout, volume, and high-vol gates) ───
     const candleRange = c.high - c.low;
     const bodyPct = candleRange > 0 ? Math.abs(c.close - c.open) / candleRange * 100 : 0;
+    const closeLoc = candleRange > 0 ? (c.close - c.low) / candleRange : 0.5;
     const bodyOkUp = p.minBodyPct <= 0 || (c.close > c.open && bodyPct >= p.minBodyPct);
     const bodyOkDn = p.minBodyPct <= 0 || (c.close < c.open && bodyPct >= p.minBodyPct);
 
@@ -245,9 +341,51 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
     const extOkUp = p.useStrictExt ? extAtrUp <= p.maxExtAtr : true;
     const extOkDn = p.useStrictExt ? extAtrDn <= p.maxExtAtr : true;
 
-    // Pullback momentum gate: disallow BUY if close < emaTrig, disallow SELL if close > emaTrig
-    const pbMomOkUp = pullbackUp ? c.close >= emaTrig[i] : true;
-    const pbMomOkDn = pullbackDn ? c.close <= emaTrig[i] : true;
+    // ─── Volume (Phase 4) ───
+    const curVol = volumes[i];
+    const curVolMA = volMA[i];
+    const curRelVol = curVolMA > 0 ? curVol / curVolMA : NaN;
+
+    // ─── Breakout: ATR buffer + close location + extension filter (Phase 3) ───
+    const btRangeHigh = i >= 1 ? highestHighBO[i - 1] : NaN;
+    const btRangeLow = i >= 1 ? lowestLowBO[i - 1] : NaN;
+    const btBufferUp = p.enableBtBuffer ? c.close > btRangeHigh + atrVal * p.breakoutBuffer : c.close > btRangeHigh;
+    const btBufferDn = p.enableBtBuffer ? c.close < btRangeLow - atrVal * p.breakoutBuffer : c.close < btRangeLow;
+    const btCloseOkUp = p.enableCloseLoc ? closeLoc >= p.closeLocMinLong : true;
+    const btCloseOkDn = p.enableCloseLoc ? closeLoc <= p.closeLocMinShort : true;
+    // Breakout extension gate — only enforced when STRICTER than the global strict gate
+    // (extOkUp/extOkDn, maxExtAtr). Under defaults (useStrictExt=true, maxExtAtr=1.5 <= 2.0)
+    // the strict gate implies the breakout gate, so this is a no-op (avoids double-counting
+    // rejections in funnels). It still binds when useStrictExt=false or breakoutExtAtr < maxExtAtr.
+    const btExtOkUp = !p.enableBtExtFilter ? true
+      : (p.useStrictExt && p.breakoutExtAtr >= p.maxExtAtr) ? true
+      : extAtrUp <= p.breakoutExtAtr;
+    const btExtOkDn = !p.enableBtExtFilter ? true
+      : (p.useStrictExt && p.breakoutExtAtr >= p.maxExtAtr) ? true
+      : extAtrDn <= p.breakoutExtAtr;
+
+    // Volume gate (Phase 4)
+    const volOkBtUp = p.enableRelVol && !isNaN(curRelVol) ? curRelVol >= p.volMinBreakout : true;
+    const volOkBtDn = p.enableRelVol && !isNaN(curRelVol) ? curRelVol >= p.volMinBreakout : true;
+    const volOkPbUp = p.enableRelVol && !isNaN(curRelVol) ? curRelVol >= p.volMinPullback : true;
+    const volOkPbDn = p.enableRelVol && !isNaN(curRelVol) ? curRelVol >= p.volMinPullback : true;
+
+    const breakUp = p.enableBreakout && !isNaN(btRangeHigh) && btBufferUp && btCloseOkUp && btExtOkUp && volOkBtUp;
+    const breakDn = p.enableBreakout && !isNaN(btRangeLow) && btBufferDn && btCloseOkDn && btExtOkDn && volOkBtDn;
+
+    // Apply volume to pullback triggers
+    const pullbackUpV = pullbackUp && volOkPbUp;
+    const pullbackDnV = pullbackDn && volOkPbDn;
+
+    const triggerUp = pullbackUpV || breakUp;
+    const triggerDn = pullbackDnV || breakDn;
+
+    // High-volatility quality gates (Phase 5)
+    const hvVolOkUp = highVol && p.hvMode === "Stronger Confirmation" ? (!isNaN(curRelVol) ? curRelVol >= p.hvVolMin : false) : true;
+    const hvVolOkDn = highVol && p.hvMode === "Stronger Confirmation" ? (!isNaN(curRelVol) ? curRelVol >= p.hvVolMin : false) : true;
+    const hvCloseOkUp = highVol && p.hvMode === "Stronger Confirmation" ? closeLoc >= p.hvCloseLocLong : true;
+    const hvCloseOkDn = highVol && p.hvMode === "Stronger Confirmation" ? closeLoc <= p.hvCloseLocShort : true;
+    const hvBlock = highVol && p.hvMode === "Block";
 
     // ─── Risk validation ───
     const entry = c.close;
@@ -368,6 +506,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
           rr1: posRR1,
           rr2: posRR2,
           trigger: posTrigger,
+          highVol: posHighVol,
         });
 
         posState = 0;
@@ -380,8 +519,20 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
     const canEnterLong = posState === 0 || posState === -1;
     const canEnterShort = posState === 0 || posState === 1;
 
-    const entryUp = cfgOk && setupUp && triggerUp && extOkUp && pbMomOkUp && bodyOkUp && riskGateBuyOk && canEnterLong;
-    const entryDn = cfgOk && setupDn && triggerDn && extOkDn && pbMomOkDn && bodyOkDn && riskGateSellOk && canEnterShort;
+    // Note: the pullback-momentum gate (pbMomOk) was removed as dead code — pullbackUp/Dn
+    // already require close > emaTrig (reclaimUp) / close < emaTrig (reclaimDn), so it was
+    // mathematically always true.
+    const entryUp = cfgOk && setupUp && triggerUp && !hvBlock && extOkUp && bodyOkUp && hvVolOkUp && hvCloseOkUp && riskGateBuyOk && canEnterLong;
+    const entryDn = cfgOk && setupDn && triggerDn && !hvBlock && extOkDn && bodyOkDn && hvVolOkDn && hvCloseOkDn && riskGateSellOk && canEnterShort;
+
+    // Fixed-risk position sizing (Phase 2)
+    const equity = 10000; // Fixed for backtest
+    const longPosRaw = p.enableFixedRisk && riskBuy > 0 ? equity * p.riskPerTrade / 100 / riskBuy : NaN;
+    const longPosCapped = p.enableFixedRisk && !isNaN(longPosRaw) && p.maxPosSize > 0 ? Math.min(longPosRaw, p.maxPosSize) : longPosRaw;
+    const longPosSize = p.enableFixedRisk && !isNaN(longPosCapped) ? Math.floor(longPosCapped * 10000) / 10000 : NaN;
+    const shortPosRaw = p.enableFixedRisk && riskSell > 0 ? equity * p.riskPerTrade / 100 / riskSell : NaN;
+    const shortPosCapped = p.enableFixedRisk && !isNaN(shortPosRaw) && p.maxPosSize > 0 ? Math.min(shortPosRaw, p.maxPosSize) : shortPosRaw;
+    const shortPosSize = p.enableFixedRisk && !isNaN(shortPosCapped) ? Math.floor(shortPosCapped * 10000) / 10000 : NaN;
 
     if (entryUp) {
       // Supersede opposite position
@@ -394,6 +545,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
           entryBar: posBar, finalR: supR, mfe: posMFE, mae: posMAE, age: posAge,
           extAtr: posExtAtr, bodyPct: posBodyPct, ema21: posEma21, atr: posAtrVal,
           structSL: posStructSL, rr1: posRR1, rr2: posRR2, trigger: posTrigger,
+          highVol: posHighVol,
         });
       }
 
@@ -409,6 +561,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
       posMFE = 0;
       posMAE = 0;
       posDir = "BUY";
+      posHighVol = highVol;
       posExtAtr = extAtrUp;
       posBodyPct = bodyPct;
       posEma21 = emaDir[i];
@@ -416,7 +569,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
       posStructSL = structSLBuy;
       posRR1 = p.tp1R;
       posRR2 = p.tp2R;
-      posTrigger = pullbackUp ? "PULLBACK RESUME" : "BREAKOUT";
+      posTrigger = pullbackUpV ? "PULLBACK RESUME" : "BREAKOUT";
 
       signals.push({
         bar: barIdx,
@@ -435,6 +588,10 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
         structSL: structSLBuy,
         regime: trendUp ? "TREND UP" : trendDn ? "TREND DOWN" : highVol ? "HIGH VOL" : "RANGING",
         setupState: setupUp ? "LONG" : "NONE",
+        relVol: curRelVol,
+        closeLocation: closeLoc,
+        highVol,
+        posSize: longPosSize,
       });
     }
 
@@ -448,6 +605,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
           entryBar: posBar, finalR: supR, mfe: posMFE, mae: posMAE, age: posAge,
           extAtr: posExtAtr, bodyPct: posBodyPct, ema21: posEma21, atr: posAtrVal,
           structSL: posStructSL, rr1: posRR1, rr2: posRR2, trigger: posTrigger,
+          highVol: posHighVol,
         });
       }
 
@@ -463,6 +621,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
       posMFE = 0;
       posMAE = 0;
       posDir = "SELL";
+      posHighVol = highVol;
       posExtAtr = extAtrDn;
       posBodyPct = bodyPct;
       posEma21 = emaDir[i];
@@ -470,7 +629,7 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
       posStructSL = structSLSell;
       posRR1 = p.tp1R;
       posRR2 = p.tp2R;
-      posTrigger = pullbackDn ? "PULLBACK RESUME" : "BREAKOUT";
+      posTrigger = pullbackDnV ? "PULLBACK RESUME" : "BREAKOUT";
 
       signals.push({
         bar: barIdx,
@@ -489,11 +648,43 @@ export function runEngine(candles, params = DEFAULT_PARAMS) {
         structSL: structSLSell,
         regime: trendUp ? "TREND UP" : trendDn ? "TREND DOWN" : highVol ? "HIGH VOL" : "RANGING",
         setupState: setupDn ? "SHORT" : "NONE",
+        relVol: curRelVol,
+        closeLocation: closeLoc,
+        highVol,
+        posSize: shortPosSize,
+      });
+    }
+
+    // ─── Audit row (opts.audit): one compact record per processed bar ───
+    if (auditRows) {
+      auditRows.push({
+        i: barIdx,
+        t: c.timestamp,
+        trending: !!trending,
+        highVol: !!highVol,
+        trendUp, trendDn, momUp, momDn, setupUp, setupDn,
+        pullbackUp, pullbackDn,                       // raw pullback trigger (no vol gate)
+        rawBOUp: p.enableBreakout && !isNaN(btRangeHigh) && c.close > btRangeHigh,
+        rawBODn: p.enableBreakout && !isNaN(btRangeLow) && c.close < btRangeLow,
+        btBufferUp, btBufferDn,
+        btCloseOkUp, btCloseOkDn,
+        btExtOkUp, btExtOkDn,                         // guarded: no-op under defaults (subsumed by strict)
+        extOkUp, extOkDn,                             // strict extension gate (maxExtAtr)
+        bodyOkUp, bodyOkDn,
+        volOkBtUp, volOkBtDn,
+        volOkPbUp, volOkPbDn,
+        hvBlock,
+        hvVolOkUp, hvVolOkDn,
+        hvCloseOkUp, hvCloseOkDn,
+        riskGateBuyOk, riskGateSellOk,
+        canEnterLong, canEnterShort,
+        entryUp, entryDn,
+        closeLoc, relVol: curRelVol, atrVal,
       });
     }
   }
 
-  return { signals, trades, candles };
+  return { signals, trades, candles, audit: auditRows };
 }
 
 // ─── SL-Failure analysis ──────────────────────────────────────────
@@ -539,7 +730,8 @@ export function analyzeSLFailures(trades, candles, window = 20) {
 
 // ─── Performance report ───────────────────────────────────────────
 
-export function generateReport(trades) {
+export function generateReport(trades, opts = {}) {
+  const riskPct = opts.riskPerTrade ?? 0.5; // % of equity risked per trade (for account % DD)
   const closed = trades.filter(t => t.exitReason !== "SUPERSEDED");
   const winners = closed.filter(t => t.finalR > 0);
   const losers = closed.filter(t => t.finalR < 0);
@@ -554,12 +746,18 @@ export function generateReport(trades) {
     ? Math.abs(winners.reduce((s, t) => s + t.finalR, 0) / losers.reduce((s, t) => s + t.finalR, 0))
     : Infinity;
 
-  // Max drawdown (in R)
-  let peak = 0, dd = 0, maxDD = 0;
+  // Max drawdown — proper peak-to-trough on cumulative R (fixed-fractional: each
+  // closed trade contributes finalR; account % version compounds the equity curve).
+  let cumR = 0, peakR = 0, maxDDR = 0;
+  let cumPct = 0, peakPct = 0, maxDDPct = 0; // equity% uses compounding of (1 + R * riskPct/100)
   for (const t of closed) {
-    peak += t.finalR;
-    dd = Math.min(dd, peak - Math.max(peak, 0));
-    maxDD = Math.min(maxDD, dd);
+    cumR += t.finalR;
+    if (cumR > peakR) peakR = cumR;
+    maxDDR = Math.max(maxDDR, peakR - cumR);
+
+    cumPct = (1 + cumPct / 100) * (1 + t.finalR * riskPct / 100) * 100 - 100;
+    if (cumPct > peakPct) peakPct = cumPct;
+    maxDDPct = Math.max(maxDDPct, peakPct - cumPct);
   }
 
   const avgMFE = closed.length > 0 ? closed.reduce((s, t) => s + t.mfe, 0) / closed.length : 0;
@@ -582,7 +780,8 @@ export function generateReport(trades) {
     avgR,
     avgWinner,
     avgLoser,
-    maxDrawdownR: maxDD,
+    maxDrawdownR: maxDDR,
+    maxDrawdownPct: maxDDPct,
     slHitPct: closed.length > 0 ? (slTrades.length / closed.length * 100) : 0,
     tpHitPct: closed.length > 0 ? (tpTrades.length / closed.length * 100) : 0,
     avgMFE,

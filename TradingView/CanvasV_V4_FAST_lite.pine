@@ -369,9 +369,12 @@ if goShort
 
 //--------------------------------------------------------------
 // Strategy exit management
+//  exitSL declared once (Pine v5 has no block scope — two top-level
+//  declarations of the same name would raise a compile error)
 //--------------------------------------------------------------
+exitSL = stratSL
+
 if strategy.position_size > 0
-    exitSL = stratSL
     if enableMoveBE and enablePartialTP and strategy.position_size < strategy.position_size[1]
         stratTp1Filled := true
     if enableMoveBE and stratTp1Filled
@@ -390,7 +393,6 @@ if strategy.position_size > 0
         strategy.close("Long", comment = "EXPIRED")
 
 if strategy.position_size < 0
-    exitSL = stratSL
     if enableMoveBE and enablePartialTP and strategy.position_size > strategy.position_size[1]
         stratTp1Filled := true
     if enableMoveBE and stratTp1Filled
