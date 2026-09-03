@@ -1,12 +1,12 @@
 //@version=5
 //+------------------------------------------------------------------+
-//|  CanvasV V4 FAST Strategy — Lite (fast-compile build)           |
-//|  Same signal logic as full version, lighter diagnostics.        |
-//|  v5.0.0-lite                                                     |
+//|  CanvasV V4.2 FAST Strategy — Lite (fast-compile build)          |
+//|  Signal logic matches TradingView/CanvasV_V4_FAST.pine (v4.2.0). |
+//|  Lighter diagnostics: no DEBUG mode / decisions log / V4LOG.     |
 //+------------------------------------------------------------------+
-strategy("CanvasV V4 FAST Lite", shorttitle = "CanvasV V4 LITE", overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 20, calc_on_every_tick = false, process_orders_on_close = false)
+strategy("CanvasV V4.2 FAST Lite", shorttitle = "CanvasV V4.2 LITE", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 20, calc_on_every_tick = false, process_orders_on_close = false)
 
-VERSION = "v5.0.0-lite"
+VERSION = "v4.2.0-lite"
 
 //--------------------------------------------------------------
 // Inputs
@@ -18,9 +18,13 @@ grpRisk    = "=== Risk ==="
 grpExec    = "=== Execution ==="
 grpVis     = "=== Visuals ==="
 grpAlerts  = "=== Alerts ==="
+grpPos     = "=== Position Sizing ==="
+grpBQ      = "=== Breakout Quality ==="
+grpVol     = "=== Volume ==="
+grpHV      = "=== High-Volatility ==="
 
 //--- Regime
-regimeBars     = input.int(10,  "Regime slope lookback (bars)", minval = 2, group = grpRegime)
+regimeBars     = input.int(10,  "Regime slope lookback (bars)", minval = 2, group = grpRegime, tooltip = "EMA(slow) slope measured over this many bars, normalized to ATR/bar.")
 regimeMinSlope = input.float(0.05, "Min regime slope (ATR per bar)", minval = 0, group = grpRegime)
 atrRegimeLen   = input.int(100, "ATR regime lookback (bars)", minval = 20, group = grpRegime)
 highVolPct     = input.float(130.0, "High volatility threshold (ATR % of its avg)", minval = 100, group = grpRegime)
@@ -38,38 +42,69 @@ enableBreakout    = input.bool(true, "Enable breakout trigger", group = grpTgr)
 pullbackLookback  = input.int(5,    "Pullback lookback (bars)", minval = 2, group = grpTgr)
 pullbackTolPct    = input.float(0.5, "Pullback touch tolerance (%)", minval = 0, group = grpTgr)
 breakoutBars      = input.int(10,   "Breakout lookback (bars)", minval = 3, group = grpTgr)
-maxExtAtr         = input.float(2.5, "Max entry extension (ATR from direction EMA)", minval = 0.1, group = grpTgr)
+maxExtAtr         = input.float(1.5, "Max entry extension (ATR from direction EMA)", minval = 0.1, group = grpTgr, tooltip = "Extension guard: |close - direction EMA| / ATR must be <= this.")
+useStrictExt      = input.bool(true, "Use strict extension filter", group = grpTgr, tooltip = "When true, entries are rejected if price is further than maxExtAtr from EMA21.")
 minBodyPct        = input.float(0.0, "Min candle body (%) (0 = off)", minval = 0, maxval = 100, group = grpTgr)
 
 //--- Risk
 swingLookback   = input.int(10,  "Swing lookback (bars)", minval = 2, group = grpRisk)
 structBufferAtr = input.float(0.5, "Structure buffer (ATR)", minval = 0, group = grpRisk)
 minRiskAtr      = input.float(0.5, "Minimum risk (ATR)", minval = 0.01, group = grpRisk)
-maxRiskAtr      = input.float(2.5, "Maximum risk (ATR)", minval = 0.01, group = grpRisk)
+maxRiskAtr      = input.float(4.0, "Maximum risk (ATR)", minval = 0.01, group = grpRisk)
 tp1R            = input.float(1.0, "TP1 R multiple", minval = 0.01, group = grpRisk)
 tp2R            = input.float(2.5, "TP2 R multiple", minval = 0.01, group = grpRisk)
-atrFallbackMult = 1.5
+atrFallbackMult = 1.5     // fixed ATR fallback for too-tight/invalid structure
+atrStopMult     = input.float(1.5, "ATR Stop Loss Buffer", minval = 0.0, step = 0.1, group = grpRisk, tooltip = "ATR buffer multiplier added to structural SL to handle noise. Total SL = structural + atrVal × this.")
 
 //--- Execution (Phase 3)
-enablePartialTP = input.bool(false, "Enable Partial Take-Profit (50/50 split)", group = grpExec)
-enableMoveBE    = input.bool(false, "Enable Break-Even Adjustment", group = grpExec)
+enablePartialTP = input.bool(false, "Enable Partial Take-Profit (50/50 split)", group = grpExec, tooltip = "Exit 50% at TP1, let remaining 50% run to TP2.")
+enableMoveBE    = input.bool(false, "Enable Break-Even Adjustment", group = grpExec, tooltip = "After TP1 fills, move SL to entry for the remaining unit.")
+enableMidTradeBE = input.bool(false, "Enable Mid-Trade Break-Even", group = grpExec, tooltip = "After beBarThreshold bars, if profit >= +0.25R, move SL to entry.")
+beBarThreshold  = input.int(10, "Break-Even bar threshold", minval = 2, group = grpExec, tooltip = "Bars held before mid-trade BE activates.")
+staleBarLimit   = input.int(15, "Stale trade exit (bars)", minval = 5, group = grpExec, tooltip = "If position is flat (-0.25R to +0.25R) after this many bars, exit at market.")
 outcomeBars     = input.int(20, "Position expiry (bars)", minval = 2, group = grpExec)
 
 //--- Session filter (Phase 3)
-useSessionFilter = input.bool(false, "Enable Session Filter", group = grpExec)
-sessionInput     = input.session("0800-1700:23456", "Trading Session", group = grpExec)
+useSessionFilter = input.bool(false, "Enable Session Filter", group = grpExec, tooltip = "Only allow new entries during the defined session window.")
+sessionInput     = input.session("0800-1700:23456", "Trading Session", group = grpExec, tooltip = "Pine session string, e.g. 0800-1700:23456 = Mon-Fri 8am-5pm.")
 
 //--- Visuals
-showPanel   = input.bool(true, "Show dashboard panel", group = grpVis)
+showPanel   = input.bool(true, "Show panel", group = grpVis)
 showMarkers = input.bool(true, "Show BUY/SELL markers", group = grpVis)
 showLevels  = input.bool(true, "Show Entry/SL/TP lines", group = grpVis)
 showEMAs    = input.bool(false, "Show EMAs", group = grpVis)
+
+//--- Position Sizing (Phase 2)
+enableFixedRisk = input.bool(true, "Enable fixed-risk position sizing", group = grpPos, tooltip = "When true, position size is calculated from risk per trade and SL distance. When false, uses default_qty_value.")
+riskPerTrade    = input.float(0.5, "Risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.1, group = grpPos, tooltip = "Percentage of equity risked per trade. Position size = risk_amount / stop_distance.")
+maxPosSize      = input.float(0.0, "Max position size (0 = no limit)", minval = 0, step = 0.1, group = grpPos, tooltip = "Maximum position size in base currency units. 0 = unlimited.")
+
+//--- Breakout Quality (Phase 3)
+enableBtBuffer    = input.bool(true, "Enable ATR breakout buffer", group = grpBQ, tooltip = "Require breakout close to exceed range by an ATR fraction.")
+breakoutBuffer    = input.float(0.10, "Breakout buffer (ATR)", minval = 0.0, step = 0.05, group = grpBQ, tooltip = "Breakout must exceed previous range by this × ATR.")
+enableCloseLoc    = input.bool(true, "Enable close-location filter", group = grpBQ, tooltip = "Require candle close to be strong (near high for long, near low for short).")
+closeLocMinLong   = input.float(0.70, "Close location min — Long (0-1)", minval = 0.0, maxval = 1.0, step = 0.05, group = grpBQ, tooltip = "For LONG breakouts: (close-low)/(high-low) must be >= this value.")
+closeLocMinShort  = input.float(0.30, "Close location max — Short (0-1)", minval = 0.0, maxval = 1.0, step = 0.05, group = grpBQ, tooltip = "For SHORT breakouts: (close-low)/(high-low) must be <= this value.")
+enableBtExtFilter = input.bool(true, "Enable breakout extension filter", group = grpBQ, tooltip = "Reject breakouts that are too far from the direction EMA.")
+breakoutExtAtr    = input.float(2.0, "Breakout extension limit (ATR)", minval = 0.5, step = 0.1, group = grpBQ, tooltip = "Max distance from EMA21 for breakout entries.")
+
+//--- Volume (Phase 4)
+enableRelVol     = input.bool(true, "Enable relative volume filter", group = grpVol, tooltip = "Reject signals with weak volume relative to average.")
+volLookback      = input.int(20, "Volume MA lookback (bars)", minval = 5, group = grpVol)
+volMinBreakout   = input.float(1.20, "Min relative vol — Breakout", minval = 0.5, step = 0.1, group = grpVol, tooltip = "Minimum relative volume for breakout entries.")
+volMinPullback   = input.float(1.10, "Min relative vol — Pullback", minval = 0.5, step = 0.1, group = grpVol, tooltip = "Minimum relative volume for pullback trigger candles.")
+
+//--- High-Volatility behavior (Phase 5)
+hvMode = input.string("Stronger Confirmation", "High-volatility mode", options = ["Allow", "Stronger Confirmation", "Block", "Reduce Risk"], group = grpHV, tooltip = "How to handle entries during high-volatility regimes.")
+hvVolMin         = input.float(1.40, "HV: Min relative vol", minval = 0.5, step = 0.1, group = grpHV, tooltip = "Stronger confirmation: minimum relative volume during high vol.")
+hvCloseLocLong   = input.float(0.75, "HV: Close location min — Long", minval = 0.0, maxval = 1.0, step = 0.05, group = grpHV)
+hvCloseLocShort  = input.float(0.25, "HV: Close location max — Short", minval = 0.0, maxval = 1.0, step = 0.05, group = grpHV)
 
 //--- Alerts
 enableAlerts = input.bool(false, "Enable entry alerts", group = grpAlerts)
 
 //--------------------------------------------------------------
-// Series
+// Series (chart-TF only — no request.security, no lookahead)
 //--------------------------------------------------------------
 emaTrig = ta.ema(close, emaTrigLen)
 emaDir  = ta.ema(close, emaDirLen)
@@ -79,6 +114,12 @@ atrAvg  = ta.sma(atrVal, atrRegimeLen)
 atrVsAvg = atrVal / math.max(atrAvg, 1e-10) * 100
 
 isConfirmed = barstate.isconfirmed
+
+//--------------------------------------------------------------
+// Volume (Phase 4)
+//--------------------------------------------------------------
+volMA      = ta.sma(volume, volLookback)
+relVol     = volMA > 0 ? volume / volMA : na
 
 //--------------------------------------------------------------
 // Regime
@@ -109,47 +150,82 @@ reclaimDn   = close < emaTrig and close[1] >= emaTrig[1]
 pullbackUp  = enablePullback and touchLowUp and reclaimUp
 pullbackDn  = enablePullback and touchHighDn and reclaimDn
 
-breakUp = enableBreakout and close > ta.highest(high, breakoutBars)[1]
-breakDn = enableBreakout and close < ta.lowest(low, breakoutBars)[1]
-
-triggerUp = pullbackUp or breakUp
-triggerDn = pullbackDn or breakDn
-
 //--------------------------------------------------------------
-// Entry quality
+// Entry quality (computed BEFORE the breakout gates — Pine Script
+// requires every identifier to be declared above its first use, and
+// btCloseOk/btExtOk below reference closeLocation / extAtrUp/Dn)
 //--------------------------------------------------------------
-candleRange = high - low
-bodyPct = candleRange > 0 ? math.abs(close - open) / candleRange * 100 : 0.0
+candleRange    = high - low
+bodyPct        = candleRange > 0 ? math.abs(close - open) / candleRange * 100 : 0.0
+closeLocation  = candleRange > 0 ? (close - low) / candleRange : 0.5
 bodyOkUp = minBodyPct <= 0 or (close > open and bodyPct >= minBodyPct)
 bodyOkDn = minBodyPct <= 0 or (close < open and bodyPct >= minBodyPct)
 
 extAtrUp = (close - emaDir) / math.max(atrVal, 1e-10)
 extAtrDn = (emaDir - close) / math.max(atrVal, 1e-10)
-extOkUp  = extAtrUp <= maxExtAtr
-extOkDn  = extAtrDn <= maxExtAtr
+extOkUp  = useStrictExt ? extAtrUp <= maxExtAtr : true
+extOkDn  = useStrictExt ? extAtrDn <= maxExtAtr : true
+
+//--- Breakout: ATR buffer + close location + extension filter (Phase 3)
+btRangeHigh   = ta.highest(high, breakoutBars)[1]
+btRangeLow    = ta.lowest(low, breakoutBars)[1]
+btBufferUp    = enableBtBuffer ? close > btRangeHigh + atrVal * breakoutBuffer : close > btRangeHigh
+btBufferDn    = enableBtBuffer ? close < btRangeLow  - atrVal * breakoutBuffer : close < btRangeLow
+btCloseOkUp   = enableCloseLoc ? closeLocation >= closeLocMinLong : true
+btCloseOkDn   = enableCloseLoc ? closeLocation <= closeLocMinShort : true
+// Breakout extension gate — only enforced when STRICTER than the global strict gate
+// (extOkUp/extOkDn, maxExtAtr). Under defaults (useStrictExt=true, maxExtAtr=1.5 <= 2.0)
+// the strict gate implies the breakout gate, so this is a no-op (avoids double-counting
+// rejections in the funnel). It still binds when useStrictExt=false or breakoutExtAtr < maxExtAtr.
+btExtOkUp     = (not enableBtExtFilter or (useStrictExt and breakoutExtAtr >= maxExtAtr)) ? true : extAtrUp <= breakoutExtAtr
+btExtOkDn     = (not enableBtExtFilter or (useStrictExt and breakoutExtAtr >= maxExtAtr)) ? true : extAtrDn <= breakoutExtAtr
+
+//--- Volume gate (Phase 4): breakouts need stronger vol, pullbacks need moderate vol
+volOkBtUp = enableRelVol and not na(relVol) ? relVol >= volMinBreakout : true
+volOkBtDn = enableRelVol and not na(relVol) ? relVol >= volMinBreakout : true
+volOkPbUp = enableRelVol and not na(relVol) ? relVol >= volMinPullback : true
+volOkPbDn = enableRelVol and not na(relVol) ? relVol >= volMinPullback : true
+
+//--- Combine breakout quality + volume into final triggers
+breakUp = enableBreakout and btBufferUp and btCloseOkUp and btExtOkUp and volOkBtUp
+breakDn = enableBreakout and btBufferDn and btCloseOkDn and btExtOkDn and volOkBtDn
+
+//--- Apply volume to pullback triggers (Pine v5 forbids re-declaring a variable
+//    with `=`, so use separate volume-gated names — matches the backtest engine)
+pullbackUpV = pullbackUp and volOkPbUp
+pullbackDnV = pullbackDn and volOkPbDn
+
+triggerUp = pullbackUpV or breakUp
+triggerDn = pullbackDnV or breakDn
 
 //--------------------------------------------------------------
-// Risk validation
+// Risk validation (structural model + dynamic ATR buffer)
 //--------------------------------------------------------------
 entry = close
 atrUsable = not na(atrVal) and atrVal > 0
 swingLow  = ta.lowest(low, swingLookback)[1]
 swingHigh = ta.highest(high, swingLookback)[1]
+//--- Structural SL + dynamic ATR buffer
 structSLBuy  = swingLow  - atrVal * structBufferAtr
 structSLSell = swingHigh + atrVal * structBufferAtr
 
-riskStructBuy = entry - structSLBuy
+//--- Apply volatility buffer: SL = structural + atrStopMult × ATR
+slBuyRaw     = structSLBuy  - atrVal * atrStopMult
+slSellRaw    = structSLSell + atrVal * atrStopMult
+
+//--- Risk validation (structural mode check)
+riskStructBuy = entry - slBuyRaw
 slModeBuy     = riskStructBuy >= minRiskAtr * atrVal
-slBuy         = slModeBuy ? structSLBuy : entry - atrFallbackMult * atrVal
+slBuy         = slModeBuy ? slBuyRaw : entry - atrFallbackMult * atrVal
 riskBuy       = entry - slBuy
 riskAtrBuy    = riskBuy / math.max(atrVal, 1e-10)
 riskGateBuyOk = atrUsable and slBuy < entry and riskAtrBuy <= maxRiskAtr
 tp1Buy        = entry + riskBuy * tp1R
 tp2Buy        = entry + riskBuy * tp2R
 
-riskStructSell = structSLSell - entry
+riskStructSell = slSellRaw - entry
 slModeSell     = riskStructSell >= minRiskAtr * atrVal
-slSell         = slModeSell ? structSLSell : entry + atrFallbackMult * atrVal
+slSell         = slModeSell ? slSellRaw : entry + atrFallbackMult * atrVal
 riskSell       = slSell - entry
 riskAtrSell    = riskSell / math.max(atrVal, 1e-10)
 riskGateSellOk = atrUsable and slSell > entry and riskAtrSell <= maxRiskAtr
@@ -162,12 +238,12 @@ tp2Sell        = entry - riskSell * tp2R
 cfgOk = emaTrigLen < emaDirLen and emaDirLen < emaSlowLen and swingLookback >= 2 and tp1R > 0 and tp2R > tp1R and maxRiskAtr > minRiskAtr
 
 //--------------------------------------------------------------
-// Session filter
+// Session filter (Phase 3)
 //--------------------------------------------------------------
 inSession = not useSessionFilter or not na(time(timeframe.period, sessionInput))
 
 //--------------------------------------------------------------
-// Strategy state variables
+// Strategy state variables (for visual display & exit management)
 //--------------------------------------------------------------
 var float  stratSL     = na
 var float  stratTP1    = na
@@ -214,6 +290,7 @@ var int    stOutSl  = 0
 var int    stOutTp1 = 0
 var int    stOutTp2 = 0
 var int    stOutExp = 0
+var int    stOutSup = 0
 var int    stWin    = 0
 var int    stLoss   = 0
 
@@ -223,19 +300,29 @@ var int    stLoss   = 0
 f_rtxt(v)  => na(v) ? "—" : str.tostring(v, format.mintick)
 
 //--------------------------------------------------------------
+// High-volatility quality gates (Phase 5)
+//--------------------------------------------------------------
+hvVolOkUp    = highVol and hvMode == "Stronger Confirmation" ? (not na(relVol) ? relVol >= hvVolMin : false) : true
+hvVolOkDn    = highVol and hvMode == "Stronger Confirmation" ? (not na(relVol) ? relVol >= hvVolMin : false) : true
+hvCloseOkUp  = highVol and hvMode == "Stronger Confirmation" ? closeLocation >= hvCloseLocLong : true
+hvCloseOkDn  = highVol and hvMode == "Stronger Confirmation" ? closeLocation <= hvCloseLocShort : true
+hvBlock      = highVol and hvMode == "Block"
+
+//--------------------------------------------------------------
 // Candidates + entries
 //--------------------------------------------------------------
 candUp = isConfirmed and cfgOk and setupUp and triggerUp
 candDn = isConfirmed and cfgOk and setupDn and triggerDn
 
-candReasonUp = not extOkUp ? "ENTRY TOO EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
-candReasonDn = not extOkDn ? "ENTRY TOO EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+//--- Rejection reason tracking
+candReasonUp = hvBlock ? "HV BLOCKED" : not extOkUp ? "REJECT: EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+candReasonDn = hvBlock ? "HV BLOCKED" : not extOkDn ? "REJECT: EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
 
-entryUp = candUp and extOkUp and bodyOkUp and riskGateBuyOk and inSession
-entryDn = candDn and extOkDn and bodyOkDn and riskGateSellOk and inSession
+entryUp = candUp and not hvBlock and extOkUp and bodyOkUp and hvVolOkUp and hvCloseOkUp and riskGateBuyOk and inSession
+entryDn = candDn and not hvBlock and extOkDn and bodyOkDn and hvVolOkDn and hvCloseOkDn and riskGateSellOk and inSession
 
-trigUpTxt = pullbackUp ? "PULLBACK" : "BREAKOUT"
-trigDnTxt = pullbackDn ? "PULLBACK" : "BREAKOUT"
+trigUpTxt = pullbackUpV ? "PULLBACK RESUME" : "BREAKOUT"
+trigDnTxt = pullbackDnV ? "PULLBACK RESUME" : "BREAKOUT"
 
 //--------------------------------------------------------------
 // One-shot guard
@@ -244,12 +331,27 @@ bool goLong  = entryUp and (na(stratEntryBar) or bar_index != stratEntryBar or s
 bool goShort = entryDn and (na(stratEntryBar) or bar_index != stratEntryBar or stratDir != -1)
 
 //--------------------------------------------------------------
+// Fixed-risk position sizing (Phase 2)
+//--------------------------------------------------------------
+longPosRaw  = enableFixedRisk and riskBuy > 0 ? strategy.equity * riskPerTrade / 100.0 / riskBuy : na
+longPosCapped = enableFixedRisk and not na(longPosRaw) and maxPosSize > 0 ? math.min(longPosRaw, maxPosSize) : longPosRaw
+longPosSize  = enableFixedRisk and not na(longPosCapped) ? math.floor(longPosCapped * 10000) / 10000 : na
+longPosSize  := enableFixedRisk and not na(longPosSize) and longPosSize > 0 ? longPosSize : na
+
+shortPosRaw   = enableFixedRisk and riskSell > 0 ? strategy.equity * riskPerTrade / 100.0 / riskSell : na
+shortPosCapped = enableFixedRisk and not na(shortPosRaw) and maxPosSize > 0 ? math.min(shortPosRaw, maxPosSize) : shortPosRaw
+shortPosSize  = enableFixedRisk and not na(shortPosCapped) ? math.floor(shortPosCapped * 10000) / 10000 : na
+shortPosSize  := enableFixedRisk and not na(shortPosSize) and shortPosSize > 0 ? shortPosSize : na
+
+//--------------------------------------------------------------
 // Strategy entry — LONG
 //--------------------------------------------------------------
 if goLong
-    strategy.entry("Long", strategy.long)
+    strategy.entry("Long", strategy.long, qty = enableFixedRisk ? longPosSize : na)
+    //--- superseded short detection
     if stratDir == -1
-        stOutExp := stOutExp + 1
+        stOutSup := stOutSup + 1
+        lastOutcome := "SUPERSEDED"
     stratDir     := 1
     stratDirTxt  := "BUY"
     stratTrigTxt := trigUpTxt
@@ -303,15 +405,17 @@ if goLong
         lblTP1   := label.new(bar_index, tp1Buy, "T1 " + f_rtxt(tp1Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
         lblTP2   := label.new(bar_index, tp2Buy, "T2 " + f_rtxt(tp2Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
     if enableAlerts
-        alert(syminfo.ticker + " " + timeframe.period + ": BUY | " + trigUpTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slBuy, format.mintick) + " TP1 " + str.tostring(tp1Buy, format.mintick), alert.freq_once_per_bar_close)
+        alert(syminfo.ticker + " " + timeframe.period + ": BUY | " + trigUpTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slBuy, format.mintick) + " TP1 " + str.tostring(tp1Buy, format.mintick) + " TP2 " + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
 
 //--------------------------------------------------------------
 // Strategy entry — SHORT
 //--------------------------------------------------------------
 if goShort
-    strategy.entry("Short", strategy.short)
+    strategy.entry("Short", strategy.short, qty = enableFixedRisk ? shortPosSize : na)
+    //--- superseded long detection
     if stratDir == 1
-        stOutExp := stOutExp + 1
+        stOutSup := stOutSup + 1
+        lastOutcome := "SUPERSEDED"
     stratDir     := -1
     stratDirTxt  := "SELL"
     stratTrigTxt := trigDnTxt
@@ -365,53 +469,88 @@ if goShort
         lblTP1   := label.new(bar_index, tp1Sell, "T1 " + f_rtxt(tp1Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.tiny)
         lblTP2   := label.new(bar_index, tp2Sell, "T2 " + f_rtxt(tp2Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.tiny)
     if enableAlerts
-        alert(syminfo.ticker + " " + timeframe.period + ": SELL | " + trigDnTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slSell, format.mintick) + " TP1 " + str.tostring(tp1Sell, format.mintick), alert.freq_once_per_bar_close)
+        alert(syminfo.ticker + " " + timeframe.period + ": SELL | " + trigDnTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slSell, format.mintick) + " TP1 " + str.tostring(tp1Sell, format.mintick) + " TP2 " + str.tostring(tp2Sell, format.mintick), alert.freq_once_per_bar_close)
 
 //--------------------------------------------------------------
-// Strategy exit management
-//  exitSL declared once (Pine v5 has no block scope — two top-level
-//  declarations of the same name would raise a compile error)
+// Strategy exit management (runs every bar while in position)
+//  - Partial TP: 50% at TP1, 50% at TP2
+//  - Break-even: after TP1 fill, move SL to entry for remaining
+//  - Mid-trade BE: after beBarThreshold bars at >= +0.25R
+//  - Stale exit: flat (-0.25R..+0.25R) after staleBarLimit bars
+//  - Expiry: close after outcomeBars if neither TP nor SL hit
 //--------------------------------------------------------------
+// exitSL / midCurR / staleR declared once (Pine v5 has no block scope —
+// declaring the same name in the LONG and SHORT blocks would be a compile error)
 exitSL = stratSL
+midCurR = 0.0
+staleR = 0.0
 
 if strategy.position_size > 0
+    //--- Break-even: detect TP1 fill (position was reduced)
     if enableMoveBE and enablePartialTP and strategy.position_size < strategy.position_size[1]
         stratTp1Filled := true
     if enableMoveBE and stratTp1Filled
         exitSL := strategy.position_avg_price
+    //--- Mid-trade break-even: after beBarThreshold bars, if profit >= +0.25R, move SL to entry
+    if enableMidTradeBE and not stratTp1Filled
+        midCurR := (close - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
+        if stratAge >= beBarThreshold and midCurR >= 0.25
+            exitSL := strategy.position_avg_price
     if enablePartialTP
         strategy.exit("L-TP1", "Long", limit = stratTP1, stop = exitSL, qty_percent = 50)
-        strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 50)
+        strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 100)
     else
         strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 100)
+    //--- Age tracking
     stratAge := bar_index - stratEntryBar
+    //--- MFE/MAE tracking
     longMFE = (high - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
     longMAE = (strategy.position_avg_price - low) / math.max(stratRisk, 1e-10)
     stratMFE := math.max(stratMFE, longMFE)
     stratMAE := math.max(stratMAE, longMAE)
+    //--- Stale trade exit: if flat after staleBarLimit bars, exit at market
+    if stratAge >= staleBarLimit and strategy.position_size > 0
+        staleR := (close - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
+        if staleR > -0.25 and staleR < 0.25
+            strategy.close("Long", comment = "STALE_EXIT")
+    //--- Expiry exit
     if stratAge >= outcomeBars and strategy.position_size > 0
         strategy.close("Long", comment = "EXPIRED")
 
 if strategy.position_size < 0
+    //--- Break-even: detect TP1 fill (position became less negative)
     if enableMoveBE and enablePartialTP and strategy.position_size > strategy.position_size[1]
         stratTp1Filled := true
     if enableMoveBE and stratTp1Filled
         exitSL := strategy.position_avg_price
+    //--- Mid-trade break-even: after beBarThreshold bars, if profit >= +0.25R, move SL to entry
+    if enableMidTradeBE and not stratTp1Filled
+        midCurR := (strategy.position_avg_price - close) / math.max(stratRisk, 1e-10)
+        if stratAge >= beBarThreshold and midCurR >= 0.25
+            exitSL := strategy.position_avg_price
     if enablePartialTP
         strategy.exit("S-TP1", "Short", limit = stratTP1, stop = exitSL, qty_percent = 50)
-        strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 50)
+        strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 100)
     else
         strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 100)
+    //--- Age tracking
     stratAge := bar_index - stratEntryBar
+    //--- MFE/MAE tracking
     shortMFE = (strategy.position_avg_price - low) / math.max(stratRisk, 1e-10)
     shortMAE = (high - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
     stratMFE := math.max(stratMFE, shortMFE)
     stratMAE := math.max(stratMAE, shortMAE)
+    //--- Stale trade exit: if flat after staleBarLimit bars, exit at market
+    if stratAge >= staleBarLimit and strategy.position_size < 0
+        staleR := (strategy.position_avg_price - close) / math.max(stratRisk, 1e-10)
+        if staleR > -0.25 and staleR < 0.25
+            strategy.close("Short", comment = "STALE_EXIT")
+    //--- Expiry exit
     if stratAge >= outcomeBars and strategy.position_size < 0
         strategy.close("Short", comment = "EXPIRED")
 
 //--------------------------------------------------------------
-// Detect trade closures
+// Detect trade closures for outcome tracking + diagnostics
 //--------------------------------------------------------------
 if strategy.closedtrades > strategy.closedtrades[1]
     ctIdx    = strategy.closedtrades - 1
