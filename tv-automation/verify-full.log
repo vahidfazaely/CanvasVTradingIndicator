@@ -1,0 +1,12 @@
+12:57:53 loading FULL (58839 chars)
+12:58:01 chart ready: true
+12:58:11 monaco visible
+12:58:11 editor focused: true
+12:58:13 inserting FULL via CDP...
+13:04:47 insert done in 394144ms; waiting 75s for Monaco...
+13:06:02 editor len: 139710
+13:06:02 add-to-chart clicked: true; waiting 30s...
+13:06:32 FULL diag lines: []
+13:06:32 FULL has compile error: false
+13:06:32 RESULT: FULL COMPILES CLEAN
+13:06:33 closed

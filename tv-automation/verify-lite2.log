@@ -1,0 +1,16 @@
+12:43:09 loading Lite (37560 chars)
+12:43:17 chart ready: true
+12:43:31 monaco visible
+12:43:31 editor focused: true
+12:43:32 inserting Lite via CDP...
+12:46:26 insert done in 173643ms; waiting 60s for Monaco...
+12:47:26 editor len: 55120
+12:47:26 add-to-chart clicked: true; waiting 25s...
+12:47:51 LITE diag lines: []
+12:47:51 LITE has compile error: false
+12:47:51 page head: BTCUSDT 15m Indicators Alert Replay Save Save Trade Publish B Bitcoin / TetherUS 15 Binance O 78,307.99 H 78,390.36 L 78,239.77 C 78,363.24 +55.24 (+0.07%) 78,363.23 SELL 0.01 78,363.24 BUY Vol · BTC 39 1D 5D 1M 3M 6M YTD 1Y 5Y All 12:47:50 UTC Watchlist Symbol Last Chg Chg% STOCKS INDICES S SPX D 7
+12:47:51 legends: 0 | tables: 2
+12:47:51   table: 
+12:47:51   table: 4:13:27 PM"Untitled script" opened
+12:47:51 RESULT: LITE COMPILES CLEAN
+12:47:51 closed
