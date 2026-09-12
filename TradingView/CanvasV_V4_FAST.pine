@@ -10,11 +10,11 @@
 //|  Position management uses strategy.entry / strategy.exit.         |
 //|  No request.security, no repaint risk beyond bar-level exec.     |
 //|                                                                  |
-//|  v5.0.0 — strategy() conversion + Phase 3 enhancements          |
+//|  v4.2.1 — tighter ATR stop buffer (1.25) from stop-structure study |
 //+------------------------------------------------------------------+
 strategy("CanvasV V4.2 FAST Strategy", shorttitle = "CanvasV V4.2", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 50, calc_on_every_tick = false, process_orders_on_close = false)
 
-VERSION = "v4.2.0"
+VERSION = "v4.2.1"
 
 //--------------------------------------------------------------
 // Inputs
@@ -64,7 +64,7 @@ maxRiskAtr      = input.float(4.0, "Maximum risk (ATR)", minval = 0.01, group = 
 tp1R            = input.float(1.0, "TP1 R multiple", minval = 0.01, group = grpRisk)
 tp2R            = input.float(2.5, "TP2 R multiple", minval = 0.01, group = grpRisk)
 atrFallbackMult = 1.5     // fixed ATR fallback for too-tight/invalid structure
-atrStopMult     = input.float(1.5, "ATR Stop Loss Buffer", minval = 0.0, step = 0.1, group = grpRisk, tooltip = "ATR buffer multiplier added to structural SL to handle noise. Total SL = structural + atrVal × this.")
+atrStopMult     = input.float(1.25, "ATR Stop Loss Buffer", minval = 0.0, step = 0.1, group = grpRisk, tooltip = "ATR buffer multiplier added to structural SL to handle noise. Total SL = structural + atrVal × this.")
 
 //--- Execution (Phase 3)
 enablePartialTP = input.bool(false, "Enable Partial Take-Profit (50/50 split)", group = grpExec, tooltip = "Exit 50% at TP1, let remaining 50% run to TP2.")

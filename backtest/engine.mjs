@@ -1,6 +1,11 @@
 // CanvasV V4 FAST — Local Signal Engine
-// Faithfully reproduces the TradingView Pine Script v4.1.0 logic.
+// Faithfully reproduces the TradingView Pine Script v4.2.1 signal logic
+// (all DEFAULT_PARAMS match the Pine input defaults exactly).
 // Single-timeframe only (no MTF/security calls in production).
+// Deliberate gaps vs Pine (all default-OFF execution extras in the .pine):
+//   partial TP, break-even-after-TP1, session filter, commission/slippage.
+// The engine additionally reports AMBIGUOUS (SL+TP same bar) and STALE_EXIT
+// outcomes, which the Pine strategy classifies by exit price alone.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -38,7 +43,7 @@ export const DEFAULT_PARAMS = {
   tp1R: 1.0,
   tp2R: 2.5,
   atrFallbackMult: 1.5,
-  atrStopMult: 1.5,
+  atrStopMult: 1.25,
 
   // Position Sizing (Phase 2)
   enableFixedRisk: true,

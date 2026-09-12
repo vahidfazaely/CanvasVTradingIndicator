@@ -1,86 +1,83 @@
-# CanvasV MTF Signal
+# CanvasV V4 FAST
 
-A multi-timeframe **4H Trend + 1H Confirmation + 15M Entry** buy/sell indicator built in TradingView Pine Script v5.
+A single-timeframe, 15m-first **trend-following trading strategy** built in TradingView Pine Script v5, with a faithful Node.js backtest engine for local research.
 
 | Platform | Language | File |
 |---|---|---|
-| TradingView | Pine Script v5 | [`TradingView/MyBuySellIndicator.pine`](TradingView/MyBuySellIndicator.pine) |
+| TradingView | Pine Script v5 (`strategy()`) | [`TradingView/CanvasV_V4_FAST.pine`](TradingView/CanvasV_V4_FAST.pine) |
+| TradingView (fast-compile) | Pine Script v5 (`strategy()`) | [`TradingView/CanvasV_V4_FAST_lite.pine`](TradingView/CanvasV_V4_FAST_lite.pine) |
+| Local backtest | Node.js (no dependencies) | [`backtest/engine.mjs`](backtest/engine.mjs) |
 
 ---
 
 ## What it is
 
-A non-repainting trend-following signal system built on a simple, explicit rule set:
+A non-repainting trend-following system built on a small, explicit rule set:
 
-1. **Trend filter** — 4H EMA 50/200 (plus an EMA 50 slope check).
-2. **Confirmation** — 1H EMA fast/slow alignment (EMA 21/50).
-3. **Entry trigger** — 15M EMA 9/21 crossover + ADX strength filter.
-4. **Risk** — structural Entry / SL / TP1 / TP2 built from market swings and actual risk (R-based).
-5. **Confidence** — a 0–100 signal score with a configurable minimum.
+1. **Regime** — EMA 50 slope (ATR-normalized) decides trending vs ranging; ATR-vs-average flags high volatility.
+2. **Direction + momentum** — EMA 9/21/50 stack plus EMA 9 slope and close-vs-EMA 21.
+3. **Entry triggers** — pullback-resume (touch EMA 21, reclaim EMA 9) or breakout (prior 10-bar range + ATR buffer, close location, extension guard).
+4. **Quality gates** — extension limit, candle body, relative volume, and stricter confirmation in high volatility.
+5. **Risk** — structural Entry / SL / TP1 / TP2 built from market swings plus an ATR buffer, with actual-risk (R-based) targets.
+6. **Position management** — `strategy.entry` / `strategy.exit` with optional partial TP, break-even moves, stale-trade exit, and time expiry.
 
-No RSI, no volume-based market structure, no machine learning. The logic is deliberately small and inspectable.
-
----
-
-## TradingView version
-
-- **Three-layer architecture:** **4H** = market trend (EMA 50/200 + slope), **1H** = intermediate confirmation (EMA 21/50), **entry** = EMA 9/21 cross + ADX + ATR on the chart.
-- **Signal engine is a 3-timeframe system — 15m / 1H / 4H only.** On **15m**, **1H**, and **4H** charts the engine is enabled and BUY/SELL signals fire (on 4H the trend uses the chart series, confirmed at candle close). On **every other timeframe** (1m/3m/5m/30m/2H/6H/12H/1D/1W/custom) the engine is gated off by `isSupportedSignalTF`: **no signals, no markers, no Entry/SL/TP levels, no score labels, no alerts** — display/context only. The panel shows `SIGNALS DISABLED` and the reason `Use 15m / 1H / 4H` (red).
-- **4H trend** is fetched with four single-line `request.security(..., "240", lookahead = barmerge.lookahead_off)` calls — one per value, each guaranteed to hold the **last completed 4H candle** (step-constant during the forming 4H candle; signals only ever see confirmed 4H values). No repaint, no lookahead.
-- **1H confirmation** uses the same methodology on `"60"`. On the 4H chart itself the trend is computed on the chart series (self mode, confirmed at close); on the 1H chart the confirmation uses the chart series. All signals fire only on **confirmed closed candles** (`barstate.isconfirmed`).
-- **Configurable scoring weights** with a default equivalent to the original 100-point model (25/25/25/25, minimum 75), plus optional **STRONG BUY / STRONG SELL** (threshold 100).
-- **Optional quality filters** (all off by default): EMA separation %, price vs EMA 21, H4 momentum, ATR volatility regime, volume confirmation.
-- **Config validation:** EMA periods must satisfy Fast < Slow, not all weights can be zero, and the minimum score cannot exceed the maximum achievable score — otherwise signals are suppressed and the panel shows `CONFIG ERROR` with the reason.
-- **Phase 1 quality gates (v2.5.0):** every signal must pass a sequential pipeline of hard gates — 4H regime (direction + strict slope + ≥ 0.10% separation; flat slope → NEUTRAL → no signal), 1H confirmation + 1H momentum (1H close vs 1H EMA21), entry structure (EMA9/EMA21 + close vs EMA9 + gap expansion), candle quality (body ≥ 50%), ADX ≥ 18, ATR/close ≥ 0.05%, and a chasing filter (|close − EMA9|/ATR ≤ 1.5). A gate failure blocks the signal regardless of score. Audit Mode shows the first failed gate as the rejection reason.
-- **Phase 2 risk engine (v3.1.0):** the position model no longer uses fixed ATR multiples. Entry = signal candle close; the stop is **structural** — `lowest(low, 10)[1] − 0.5·ATR` for BUY / `highest(high, 10)[1] + 0.5·ATR` for SELL (mandatory `[1]`, so the signal candle never defines its own swing). **Risk** = |Entry − SL|. If the structural stop is too tight (< 0.5·ATR) the model falls back to the documented `1.5·ATR` stop; if **risk > 2.5·ATR** the setup is **rejected outright** (hard risk gate — no marker, no levels, no alert). TP1 = Entry ± 1.0R, TP2 = Entry ± 2.5R — both derived from actual risk, never from ATR. The panel shows `RISK` (in ATR) and `R:R`; Audit Mode shows the full breakdown (STRUCT SL, FINAL SL, SL MODE, RISK, RISK ATR, TP1 R, TP2 R, R:R).
-- **Signal Audit Mode** (default off): a debug-only diagnostic table that first reports the timeframe policy — `SIGNAL TF` (15M/1H/4H or the chart TF) and `SIGNAL MODE` (`ENABLED` / `DISABLED`, with the reason `Use 15m / 1H / 4H` on unsupported charts). On supported timeframes it additionally shows the exact values and conditions that produced the latest confirmed signal — 4H trend/slope, 1H confirmation, entry trigger, ADX, score breakdown, ATR levels, and signal bar with `CONFIRMED YES`. Presentation only; when off the chart is unchanged.
-- **Signal Decision Logger (v3.3.0, Visuals group, default off):** a **data-collection** layer that answers *why* a candidate was accepted or rejected. Every confirmed candidate on a supported timeframe (a fresh EMA9/21 crossover) is logged with the exact engine values (4H regime/slope/separation, 1H structure/momentum, entry structure/position/EMA-expansion, candle, ADX/ATR%/chasing, full score breakdown, Entry/SL/TP/Risk/R:R) and the **first failing condition** in pipeline order — `4H REGIME` / `4H SLOPE` / `4H SEPARATION` / `1H STRUCTURE` / `1H MOMENTUM` / `ENTRY STRUCTURE` / `ENTRY POSITION` / `EMA EXPANSION` / `NO TRIGGER` / `CANDLE DIRECTION` / `CANDLE BODY` / `ADX` / `VOLATILITY` / `CHASING` / `INVALID STRUCTURE` / `RISK TOO LARGE` / `SCORE TOO LOW` — with the actual observed value (`ADX 14.2 ✗ (min 99)`). Output: a `RECENT DECISIONS` event history (bounded, default 20), a `— DECISION LOG —` detail (DECISION `BUY`/`REJECTED`, score, position), a `— GATE STATUS —` table (PASS/FAIL/N/A per gate), `— DIAGNOSTIC STATS —` (candidates/signals/rejected + per-reason counts), plus MFE/MAE **outcome tracking** in R and optional `CVLOG` alerts (own default-off input, separate from trading alerts). Historical candles replay the same decisions after reload. Bounded arrays, no files, **not a backtest** (no `strategy()`, no orders, no P&L). When off, the script is byte-identical to v3.2.0 (only the new input exists).
-- **v3.4.4 signal sensitivity (15m tuning):** new `Signal Sensitivity` input (Conservative / Balanced / Aggressive, default **Conservative = exact v3.4.3 behavior**). Balanced relaxes only the secondary filters that rejected the most candidates (4H flat slope allowed, 1H structure/momentum tolerance, candle body 40%, ADX −3, chase 2.0 ATR, vol floor 0.04%); Aggressive additionally drops the 4H-slope gate requirement. 4H direction, separation, minimum score, and the structural SL/TP/risk model are never relaxed; STRONG still requires a strictly rising/falling 4H.
-- **v3.4.2 workflow (log export):** resolved signals now emit machine-readable **`CVOUT`** alert lines (outcome, resolution bars/time, MFE/MAE in R, final R, H4/1H at exit, alignment, Entry/SL/TP1/TP2) through the same `Enable diagnostic CVLOG alerts` toggle, and the CVLOG signal lines gained a `|T=` bar-time field so outcomes can be joined to signals. Repo helpers: `scripts/copy-pine-to-clipboard.bat` (one-click copy of the Pine source) and `scripts/append-clipboard-to-log.bat` (collect CVLOG/CVOUT lines into `logs/cvlog.txt`). Diagnostic-only — trading logic is unchanged.
-- **v3.4.1 observability (Phase 4A):** the logger now captures market **context** per event — H4 slope magnitude (%), H4 EMA separation (%), price distance from the 4H EMA50 (in ATR), an **ATR volatility regime** (current ATR vs its own 200-bar SMA → LOW / NORMAL / HIGH / EXTREME; ratio shown as %), **1H confirmation freshness** (entry-TF bars since the confirmed 1H state last updated; on 15m it cycles 0–3 per 1H candle), **bars since the previous signal** (`N/A` for the first), and — per resolved signal — **resolution context**: outcome bars + elapsed time, the H4 and 1H state at the resolution candle, and whether the original directional alignment remained `INTACT` / `BROKEN`. `— DECISION LOG —` gains a `— CONTEXT —` and `— RESOLUTION —` section; `— DIAGNOSTIC STATS —` gains candidate averages (score, H4 slope, H4 sep, H4 dist, ATR, 1H age, resolution bars) and an outcome-count row (`SL / TP1 / TP2 / AMB / EXP / SUP`). New `ATR regime lookback (diagnostic)` input (default 200, Diagnostics group). All values are observation-only — they never feed back into any gate, score, or signal.
-- **Visuals (v3.4.0 cleanup):** a 2-color directional language — **GREEN** = bullish/BUY/PASS, **RED** = bearish/SELL/FAIL, with WHITE/SILVER for neutral values and blue/orange purely for EMA line identification. BUY/SELL/STRONG markers are green/red with direction labels; the latest-signal score label matches direction; ENTRY is white/neutral, SL red, TP1/TP2 share one directional color (green for BUY, red for SELL). The info panel is compact (11 rows): TREND → SIGNAL → SCORE → ENTRY → SL → TP1 → TP2 → RISK → R:R, plus one context footer (`15M SIGNAL · 1H BULLISH · ADX 35.8` with ENABLED/DISABLED status; red with the reason on blocked timeframes / config errors). Every element individually toggleable.
-
-
+Single timeframe only: everything runs on the chart series. No `request.security`, no multi-timeframe calls, no lookahead.
 
 ---
 
-## Signal logic overview
+## TradingView version (v4.2.1)
 
-### 4H trend (both platforms)
+- **Pipeline:** `REGIME → DIRECTION → SETUP → TRIGGER → RISK → STRATEGY`. A candidate must pass every stage; entries fire only on **confirmed closed candles** (`barstate.isconfirmed`).
+- **Regime:** EMA 50 slope over 10 bars, normalized to ATR/bar; trending when |slope| ≥ 0.05. Trend direction needs the EMA 21/50 stack *and* a rising/falling EMA 50. High-volatility flag when ATR ≥ 130% of its 100-bar average.
+- **Setup:** trend + momentum must agree — EMA 9 rising/falling over 3 bars with close on the right side of EMA 21.
+- **Triggers (either one):**
+  - *Pullback resume* — lowest low / highest high of the last 5 bars touched EMA 21 (±0.5%), then close reclaims EMA 9.
+  - *Breakout* — close beyond the prior 10-bar range by 0.10 ATR, with close location ≥ 0.70 (long) / ≤ 0.30 (short) and within 2.0 ATR of EMA 21.
+- **Entry quality:** |close − EMA 21| ≤ 1.5 ATR (strict, on by default); optional minimum candle-body %.
+- **Volume (Phase 4):** relative volume vs 20-bar average — ≥ 1.20 for breakouts, ≥ 1.10 for pullbacks.
+- **High volatility (Phase 5):** `Stronger Confirmation` by default — entries during high-vol regimes need relVol ≥ 1.40 and close location ≥ 0.75 / ≤ 0.25. Alternatives: `Allow`, `Block`, `Reduce Risk`.
+- **Risk model:** Entry = signal close. Structural SL = 10-bar swing (signal bar excluded via `[1]`) ∓ 0.5 ATR, then a further `atrStopMult` (1.25) × ATR buffer. Too-tight structure (< 0.5 ATR) falls back to a 1.5 ATR stop; risk > 4.0 ATR **rejects the setup**. TP1 = 1.0R, TP2 = 2.5R.
+- **Position sizing (Phase 2):** fixed-risk 0.5% of equity per trade (on by default), optional max-size cap.
+- **Execution (Phase 3):** optional 50/50 partial TP at TP1/TP2, break-even after TP1 fill, mid-trade break-even (+0.25R after 10 bars) — all off by default. **Always on:** stale-trade exit (flat ±0.25R after 15 bars → market) and time expiry (20 bars).
+- **Costs modeled:** $10k capital, 0.04% commission, 1-tick slippage.
+- **Visual modes:** `NORMAL` = clean chart (regime-colored trend line, ▲/▼ markers, 11-row panel); `DEBUG` = full EMA set, 15-row research panel, decisions log, per-signal record labels. Signal logic is identical in both.
+- **Diagnostics:** outcome tracking (`TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`), MFE/MAE in R, a 10-bar post-SL observation window, and optional `V4LOG` / `V4OUT` / `V4POST` machine-readable alerts (all off by default). Session filter available, off by default.
+- **Lite build:** `CanvasV_V4_FAST_lite.pine` is signal-identical (95 identifiers + 50 inputs verified equal; zero divergences on the 90/90 hold-out) with diagnostics-only trims for faster compile. Use it when the full script hits TradingView compile limits.
 
-- **Bullish:** H4 EMA 50 > H4 EMA 200
-- **Bearish:** H4 EMA 50 < H4 EMA 200
-- **Slope (BUY):** closed H4 EMA 50 ≥ previous closed H4 EMA 50
-- **Slope (SELL):** closed H4 EMA 50 ≤ previous closed H4 EMA 50
-- Closed H4 candles only. No lookahead. No repainting.
+---
 
-### 1H confirmation
+## Local backtest engine
 
-- **Bullish:** 1H EMA 21 > 1H EMA 50 (last closed 1H candle)
-- **Bearish:** 1H EMA 21 < 1H EMA 50
+`backtest/engine.mjs` is a dependency-free Node.js mirror of the Pine v4.2.1 signal logic — every default parameter matches the Pine input defaults exactly. It adds `AMBIGUOUS` (SL+TP hit on the same bar) and `STALE_EXIT` outcomes, which the Pine strategy can only classify by exit price. It does **not** model the default-off Pine extras (partial TP, break-even-after-TP1, session filter, commission/slippage).
 
-### EMA 9/21 entry (chart TF)
+```bash
+cd backtest
+node simple-test.mjs BTCUSDT              # production baseline, one symbol
+node simple-test.mjs BTCUSDT --vs atrStopMult=1.0   # A/B against a tweak
+node simple-test.mjs BTCUSDT --halves     # 90/90 split check
+node run.mjs --symbol ETHUSDT             # full report + SL-failure analysis
+node fetch-data.mjs --symbol ETHUSDT --interval 15m --days 180  # refresh data
+node web-test.mjs --open                  # Web Test Lab dashboard
+```
 
-- **Bullish crossover:** previous EMA 9 ≤ previous EMA 21 AND current EMA 9 > current EMA 21
-- **Bearish crossover:** previous EMA 9 ≥ previous EMA 21 AND current EMA 9 < current EMA 21
-- Evaluated on the **chart timeframe when it is 15m, 1H, or 4H** (closed candles only).
+Windows shortcuts: `CanvasV-Test.cmd` (quick-test menu), `CanvasV-Web.cmd` (dashboard).
 
-### ADX filter
+Research scripts (ablation, forensics, hold-outs, sweep) live in [`backtest/`](backtest/) with their reports in [`backtest/engine/output/`](backtest/engine/output/). Data: 15m Binance OHLCV, ~180 days per symbol, in [`backtest/engine/data/`](backtest/engine/data/).
 
-- ADX period 14, minimum 20, computed on the entry timeframe, closed candle only.
+**Current production baselines** (v4.2.1 defaults, full window): BTC 48 trades / +9.84R · ETH 46 trades / +4.70R · SOL 38 trades / +5.28R. See `V4-LITE-HOLDOUT90.md` and `V4-SIGNAL-QUALITY-LATENCY-AUDIT.md` (v4.2.0-era reports; re-run to refresh).
 
-### Structural SL / R-based TP (v3.1.0)
+---
 
-- **Entry** = signal candle close. **Structural SL** uses the swing of the previous `10` completed bars (the signal candle is excluded via `[1]`): BUY `SL = lowest(low, 10)[1] − 0.5·ATR`, SELL `SL = highest(high, 10)[1] + 0.5·ATR`.
-- **Risk** = |Entry − SL|. **TP1 = Entry ± 1.0·Risk**, **TP2 = Entry ± 2.5·Risk** — take-profits are multiples of actual risk (R), never of ATR.
-- **Fallback:** a structural stop tighter than 0.5·ATR (or invalid) falls back to the documented `1.5·ATR` stop — it never blocks the signal.
-- **Hard risk gate:** a setup whose risk exceeds **2.5·ATR** is **rejected** (no signal, no levels, no alert; Audit Mode reason `RISK TOO LARGE`).
+## Repository layout
 
-### Signal scoring
-
-- Each satisfied component adds its weight (defaults: trend 25, **1H confirmation** 25, ADX 25, slope 25; max 100).
-- **BUY** requires: supported signal TF (15m/1H/4H) AND 4H bullish AND 1H bullish confirmation AND bullish crossover AND score ≥ minimum (default 75). **SELL** mirrored.
-- **STRONG** signals require a higher score threshold (default 100), optional.
+```
+TradingView/   V4.2 FAST strategy (.pine) — full + lite builds
+backtest/      Node.js engine, runners, research scripts, data, reports
+scripts/       Pine checks (structure, full-vs-lite parity)
+docs/          Strategy spec, changelog, testing guide
+tv-automation/ Playwright helpers for loading/verifying Pine in TradingView
+logs/          Collected TradingView diagnostic lines (local data)
+```
 
 ---
 
@@ -88,23 +85,24 @@ No RSI, no volume-based market structure, no machine learning. The logic is deli
 
 This is a hard requirement, not a preference:
 
-- Signals are only generated **after the signal candle closes** (`barstate.isconfirmed`).
-- Higher-timeframe values are the **last completed H4 candle**: with `lookahead_off`, each H4 value is step-constant during the forming H4 candle and only updates when an H4 candle completes. At the exact H4 boundary bar the value is the just-completed candle's final value — confirmed data at that bar's close.
-- The H4 EMA 50 slope compares **two consecutive closed H4 candles** (`[1]` applied *inside* the H4 context of `request.security`).
-- No `lookahead_on` is used anywhere.
+- Entries are generated only **after the signal candle closes** (`barstate.isconfirmed`).
+- All series (EMAs, ATR, swings, volume) use confirmed chart-TF bars only; swing/range lookups exclude the signal bar via `[1]`.
+- No `request.security` and no `lookahead_on` anywhere — there is no higher-timeframe data to leak.
 - A signal, once printed, never moves or disappears.
 
-See [`docs/Testing.md`](docs/Testing.md) for the repaint verification procedure.
+See [`docs/Testing.md`](docs/Testing.md) for verification.
 
 ---
 
 ## Documentation
 
-- [`docs/Strategy.md`](docs/Strategy.md) — precise signal logic and defaults.
-- [`docs/Changelog.md`](docs/Changelog.md) — version history.
-- [`docs/Testing.md`](docs/Testing.md) — how we test the indicator in TradingView.
+- [`docs/Strategy.md`](docs/Strategy.md) — precise signal logic and defaults (current baseline: v4.2.1).
+- [`docs/Changelog.md`](docs/Changelog.md) — version history (V3 MTF indicator → V4 FAST strategy).
+- [`docs/Testing.md`](docs/Testing.md) — how to test in TradingView and locally.
 
 ## Development status
 
-- **TradingView:** `v3.4.4` — three-layer TF architecture with a **15m / 1H / 4H signal-engine policy**, **Phase 1 quality gates**, the **Phase 2 structural risk engine** (structural SL, risk validation, R-based TP1/TP2), the **v3.3.0 Signal Decision Logger** (first-failure chain, gate-status table, decision statistics, event history, MFE/MAE outcome tracker), the **v3.4.0 presentation-only cleanup** (2-color directional language, compact 11-row panel), the **v3.4.1 observability release** (Phase 4A context fields), the **v3.4.2 workflow release** (CVOUT resolution alerts + CVLOG time fields + clipboard/collector helpers), the **v3.4.3 performance release** (event-driven debug tables — fixes the "Heavy script" runtime warning), and the **v3.4.4 sensitivity release** (Signal Sensitivity presets for 15m frequency tuning; Conservative = exact prior behavior) — working and compiling in the Pine Editor.
-- **Next milestone:** a Pine `strategy()` backtest version (planned, not yet implemented).
+- **TradingView:** `v4.2.1` — single-TF `strategy()` conversion with the full research stack (fixed-risk sizing, breakout quality, volume filter, high-volatility modes, partial-TP / break-even / stale / expiry exits, NORMAL/DEBUG visuals, outcome + post-SL diagnostics). v4.2.1 retunes the ATR stop buffer 1.5 → 1.25 from the stop-structure study (see changelog). Working and compiling in the Pine Editor.
+- **Local engine:** mirrors Pine v4.2.1 signal logic exactly; used for all backtest reports.
+- **V3 note:** the legacy V3 MTF indicator (`MyBuySellIndicator.pine`) is described in the changelog but is **not present** in this repository checkout — only the V4 line ships here.
+- **Open research question:** second-half decay in the 90/90 hold-out on all symbols (v4.2.1: BTC +7.78 → +2.06R, ETH +1.68 → +3.03R, SOL +5.65 → −0.37R); see `V4-R1-SOL-SECONDHALF.md` and `r1-sol-forensics.mjs`.
