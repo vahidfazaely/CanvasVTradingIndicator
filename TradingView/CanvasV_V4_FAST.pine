@@ -10,11 +10,11 @@
 //|  Position management uses strategy.entry / strategy.exit.         |
 //|  No request.security, no repaint risk beyond bar-level exec.     |
 //|                                                                  |
-//|  v4.2.1 — tighter ATR stop buffer (1.25) from stop-structure study |
+//|  v4.3.0 — full exit at TP1 + exact limit-fill accounting           |
 //+------------------------------------------------------------------+
 strategy("CanvasV V4.2 FAST Strategy", shorttitle = "CanvasV V4.2", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 50, calc_on_every_tick = false, process_orders_on_close = false)
 
-VERSION = "v4.2.1"
+VERSION = "v4.3.0"
 
 //--------------------------------------------------------------
 // Inputs
@@ -549,6 +549,7 @@ if goShort
 
 //--------------------------------------------------------------
 // Strategy exit management (runs every bar while in position)
+//  - Single TP (default, v4.3.0): 100% at TP1 — runners give the profit back
 //  - Partial TP: 50% at TP1, 50% at TP2
 //  - Break-even: after TP1 fill, move SL to entry for remaining
 //  - Expiry: close after outcomeBars if neither TP nor SL hit
@@ -574,7 +575,7 @@ if strategy.position_size > 0
         strategy.exit("L-TP1", "Long", limit = stratTP1, stop = exitSL, qty_percent = 50)
         strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 100)
     else
-        strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 100)
+        strategy.exit("L-TP1", "Long", limit = stratTP1, stop = exitSL, qty_percent = 100)
     //--- Age tracking
     stratAge := bar_index - stratEntryBar
     //--- MFE/MAE tracking
@@ -606,7 +607,7 @@ if strategy.position_size < 0
         strategy.exit("S-TP1", "Short", limit = stratTP1, stop = exitSL, qty_percent = 50)
         strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 100)
     else
-        strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 100)
+        strategy.exit("S-TP1", "Short", limit = stratTP1, stop = exitSL, qty_percent = 100)
     //--- Age tracking
     stratAge := bar_index - stratEntryBar
     //--- MFE/MAE tracking

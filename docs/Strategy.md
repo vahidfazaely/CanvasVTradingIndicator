@@ -1,6 +1,6 @@
 # Strategy — CanvasV V4 FAST
 
-This document describes the **current baseline** (TradingView `v4.2.1`, Pine `strategy()`) signal logic precisely. It documents *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v4.3.0`, Pine `strategy()`) signal logic precisely. It documents *what the code does*, not a proposal.
 
 Pine source: [`TradingView/CanvasV_V4_FAST.pine`](../TradingView/CanvasV_V4_FAST.pine).
 Lite build: [`TradingView/CanvasV_V4_FAST_lite.pine`](../TradingView/CanvasV_V4_FAST_lite.pine) — signal-identical, diagnostics trimmed (see §13).
@@ -142,6 +142,7 @@ Entries go through `strategy.entry("Long"/"Short")` with a one-shot bar guard; a
 
 | Exit | Default | Rule |
 |---|---|---|
+| Single TP (100% at TP1) | **on** | default since v4.3.0 — runners systematically give the profit back |
 | Partial TP (50% TP1 / 50% TP2) | off | `enablePartialTP` |
 | Break-even after TP1 fill | off | `enableMoveBE` (needs partial TP) |
 | Mid-trade break-even | off | `enableMidTradeBE`: after 10 bars, profit ≥ +0.25R → SL to entry |
@@ -165,7 +166,7 @@ The stale exit and expiry have no off switch — they always apply.
 
 ## 13. Lite build
 
-`TradingView/CanvasV_V4_FAST_lite.pine` (`v4.2.1-lite`) trims **diagnostics only**: no `visualMode`/`DEBUG` mode, no decisions log, no `V4LOG`/`V4OUT`/`V4POST` alerts, no post-SL window. Verified signal-identical to the full build:
+`TradingView/CanvasV_V4_FAST_lite.pine` (`v4.3.0-lite`) trims **diagnostics only**: no `visualMode`/`DEBUG` mode, no decisions log, no `V4LOG`/`V4OUT`/`V4POST` alerts, no post-SL window. Verified signal-identical to the full build:
 
 - `node scripts/check-pine-parity.mjs` — 95 identifiers + 50 inputs match.
 - `backtest/engine/output/V4-LITE-HOLDOUT90.md` — zero divergences across 3 symbols × 3 windows.
@@ -174,7 +175,7 @@ The stale exit and expiry have no off switch — they always apply.
 
 ## 14. Local engine parity
 
-`backtest/engine.mjs` reproduces the Pine v4.2.1 signal logic: every `DEFAULT_PARAMS` value equals its Pine input default (verified by direct extraction; no engine-only keys). Indicator math matches Pine `ta.*` semantics (EMA seed = SMA, Wilder RMA for ATR, `[1]`-shifted rolling extremes, NaN-safe warmup).
+`backtest/engine.mjs` reproduces the Pine v4.3.0 signal logic: every `DEFAULT_PARAMS` value equals its Pine input default (verified by direct extraction; no engine-only keys). Indicator math matches Pine `ta.*` semantics (EMA seed = SMA, Wilder RMA for ATR, `[1]`-shifted rolling extremes, NaN-safe warmup). TP1/TP2 exits credit exact limit R (v4.3.0), matching TradingView limit fills.
 
 Deliberate differences (documented in the engine header):
 

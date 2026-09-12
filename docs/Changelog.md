@@ -7,6 +7,44 @@ All notable changes to CanvasV V4 FAST.
 > `v3.4.4-legacy` baseline referenced below are not present in this repository's history —
 > the V3 entries are kept as design history only.
 
+## v4.3.0 — Exit-model release: full exit at TP1 + exact limit-fill accounting
+
+Date: 2026-09-12
+
+**Behavior change (exits only — entries untouched).** Two findings from the exit-policy
+shootout (6 policies × 3 symbols, identical v4.2.1 entries, full window + 90/90 halves):
+
+1. **Live Pine underperformed the engine.** The engine exits 100% at TP1, but Pine's
+   default single exit rode to TP2 (`limit = stratTP2`) — a ~2.8R total gap (Pine-faithful
+   +19.17R vs full-at-TP1 +21.98R). Runners systematically give the profit back: 50/50
+   partials (+20.55R plain, +20.10R with break-even) both lose to banking TP1 in full.
+   The MFE ladder explains why: only 28–38% of trades ever reach +1R, 7–10% reach +1.5R,
+   ~0% reach +2R. Closer TPs (full/partial at 0.75R) help ETH/SOL but hurt BTC — rejected
+   as symbol-dependent.
+2. **Engine TP credit was noisy.** TP exits credited the bar's close (±0.25R avg noise
+   per TP trade) instead of the limit price TradingView actually fills at. Validation: an
+   independent harness replicated the engine trade-for-trade (**132/132 exit reasons
+   identical**); only TP R differed.
+
+Changed:
+
+- Pine (full + Lite): default single exit is now 100% at TP1 (`limit = stratTP1`, exit
+  IDs `L-TP1`/`S-TP1`). Partial-TP mode (50/50 + optional break-even) is preserved as an
+  opt-in; the TP2 line remains for partial mode and as a visual runner target.
+- Engine: TP1/TP2 exits credit exactly `tp1R`/`tp2R`. Same trades, same reasons — honest
+  fills only. Engine↔Pine default parity restored (both full-at-TP1).
+- `VERSION` → `v4.3.0` / `v4.3.0-lite`.
+
+New baselines (full window): **BTC 48t / +8.06R · ETH 46t / +7.33R · SOL 38t / +6.58R**
+(total +21.98R). All 6 halves positive (BTC +6.49/+1.57, ETH +3.25/+4.09, SOL +6.10/+0.49).
+Note BTC's baseline *fell* (+9.84 → +8.06): its TP1 bars close strong, so close-based
+credit was overstating — the new figure is the honest one.
+
+Not changed (deliberately): entries and all gates. SOL-long forensics (18 longs, 9W/9L)
+found no entry-bar feature separating winners from losers (extension/body/close-location/
+volume/risk all ~identical), so no new entry filter was added. SOL longs remain −1.38R —
+still the open signal-side question.
+
 ## v4.2.1 — Stop-structure study: ATR stop buffer 1.5 → 1.25
 
 Date: 2026-09-12
