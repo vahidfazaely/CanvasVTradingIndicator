@@ -122,6 +122,12 @@ const server = http.createServer((req, res) => {
     });
     return sendJson(res, 200, { symbols: meta });
   }
+  if (url === "/api/params") {
+    // Engine input defaults + runtime types, so the form can never drift from the engine.
+    const out = {};
+    for (const [k, v] of Object.entries(DEFAULT_PARAMS)) out[k] = { value: v, type: typeof v };
+    return sendJson(res, 200, { params: out });
+  }
   if (url === "/api/run" && req.method === "POST") {
     let raw = "";
     req.on("data", (d) => { raw += d; });
@@ -182,6 +188,13 @@ const PAGE_HTML = `<!DOCTYPE html>
   .hist li { padding:7px 0; border-bottom:1px dashed var(--line); font-size:13px; }
   .hist .t { color:var(--dim); font-family:Consolas,monospace; font-size:11.5px; margin-right:8px; }
   .err { color:var(--bad); }
+  .pform { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px 16px; margin-top:8px; }
+  .psec { grid-column:1/-1; margin:12px 0 2px; font-size:13px; color:var(--acc); border-bottom:1px solid var(--line); padding-bottom:4px; font-weight:600; }
+  .pfield { display:flex; flex-direction:column; gap:4px; }
+  .pfield label { font-size:12px; color:var(--dim); }
+  .pfield input[type=number], .pfield select { background:#21262d; color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:13px; }
+  .pfield input[type=checkbox] { width:16px; height:16px; }
+  #paramFilter { background:#21262d; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:14px; }
 </style>
 </head>
 <body>
@@ -196,7 +209,7 @@ const PAGE_HTML = `<!DOCTYPE html>
     <div class="meta" id="meta"></div>
   </div>
   <div class="card">
-    <h2>2 &middot; Test</h2>
+    <h2>2 &middot; Preset tests</h2>
     <div class="row">
       <button id="btnBaseline" class="primary">Run baseline (all windows)</button>
       <button id="btnAB">A/B &middot; stop 1.5 vs 1.0</button>
@@ -205,11 +218,21 @@ const PAGE_HTML = `<!DOCTYPE html>
     <div class="dim" style="margin-top:10px">Current symbol: <b id="curSym">BTCUSDT</b> &middot; Baseline = production defaults (36t / +6.43R on BTC). A/B shows full + both 90/90 halves with a &Delta; column. Sweep compares stop widths 1.0 / 1.25 / 1.5 on the full window of every symbol.</div>
   </div>
   <div class="card">
-    <h2>Results</h2>
-    <div id="results"><div class="dim">Pick a test above &mdash; it runs in a second or two.</div></div>
+    <h2>3 &middot; Custom parameters</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button id="btnCustom" class="primary">Run custom</button>
+      <button id="btnCustomAB">Custom vs default</button>
+      <button id="btnReset">Reset to defaults</button>
+      <input id="paramFilter" type="text" placeholder="Filter parameters&hellip;">
+    </div>
+    <div class="pform" id="paramsForm"><div class="dim">Loading parameters&hellip;</div></div>
   </div>
   <div class="card">
-    <h2>History</h2>
+    <h2>4 &middot; Results</h2>
+    <div id="results"><div class="dim">Pick a preset or run a custom parameter set above &mdash; it runs in a second or two.</div></div>
+  </div>
+  <div class="card">
+    <h2>5 &middot; History</h2>
     <ul class="hist" id="hist"></ul>
   </div>
 </main>
@@ -412,8 +435,150 @@ document.getElementById("btnSweep").addEventListener("click", function () {
   });
 });
 
+// ------------------------------------------------------------- custom parameters
+var PKEY = null; // key -> {value, type} from the engine
+var LABELS = {
+  atrPeriod: "ATR period", emaTrigLen: "Fast EMA length (trigger)", emaDirLen: "Direction EMA length",
+  emaSlowLen: "Slow EMA length", regimeBars: "Regime slope bars", regimeMinSlope: "Regime min slope",
+  atrRegimeLen: "ATR regime length (bars)", highVolPct: "High-vol ATR % threshold", momSlopeBars: "Momentum slope bars",
+  enablePullback: "Pullback entries", enableBreakout: "Breakout entries", pullbackLookback: "Pullback lookback (bars)",
+  pullbackTolPct: "Pullback tolerance %", breakoutBars: "Breakout lookback (bars)", maxExtAtr: "Max entry extension (ATR)",
+  useStrictExt: "Strict extension guard", minBodyPct: "Min entry body %",
+  swingLookback: "Swing lookback (bars)", structBufferAtr: "Structural SL buffer (ATR)", minRiskAtr: "Min risk (ATR)",
+  maxRiskAtr: "Max risk (ATR)", tp1R: "TP1 distance (R)", tp2R: "TP2 distance (R)",
+  atrFallbackMult: "ATR fallback SL multiplier", atrStopMult: "ATR stop buffer",
+  enableFixedRisk: "Fixed-risk sizing", riskPerTrade: "Risk per trade %", maxPosSize: "Max position size",
+  enableBtBuffer: "Breakout ATR buffer", breakoutBuffer: "Breakout buffer (ATR)", enableCloseLoc: "Close-location filter",
+  closeLocMinLong: "Close-loc min LONG", closeLocMinShort: "Close-loc min SHORT", enableBtExtFilter: "Breakout extension filter",
+  breakoutExtAtr: "Breakout ext (ATR)", enableRelVol: "Relative-volume filter", volLookback: "Volume lookback (bars)",
+  volMinBreakout: "Min relVol breakout", volMinPullback: "Min relVol pullback",
+  hvMode: "High-volatility mode", hvVolMin: "HV min relVol", hvCloseLocLong: "HV close-loc LONG", hvCloseLocShort: "HV close-loc SHORT",
+  enableMidTradeBE: "Mid-trade break-even", beBarThreshold: "Break-even after (bars)", staleBarLimit: "Stale exit after (bars)",
+  outcomeBars: "Outcome time limit (bars)",
+};
+function plabel(k) { return LABELS[k] || k.replace(/([A-Z])/g, " $1").replace(/^./, function (c) { return c.toUpperCase(); }); }
+function pgroup(k) {
+  var G = { regimeBars: "Regime", emaTrigLen: "Direction & momentum", enablePullback: "Triggers",
+    swingLookback: "Risk", enableFixedRisk: "Position sizing", enableBtBuffer: "Breakout quality",
+    enableRelVol: "Volume", hvMode: "High volatility", enableMidTradeBE: "Position management" };
+  return G[k] || null;
+}
+var HVMODES = ["Allow", "Stronger Confirmation", "Block", "Reduce Risk"];
+
+function loadParams() {
+  fetch("/api/params").then(function (r) { return r.json(); }).then(function (m) {
+    PKEY = m.params;
+    var form = document.getElementById("paramsForm");
+    form.innerHTML = "";
+    Object.keys(m.params).forEach(function (k) {
+      var meta = m.params[k];
+      var gh = pgroup(k);
+      if (gh) form.appendChild(h("h4", "psec", gh));
+      var f = h("div", "pfield");
+      f.appendChild(h("label", "", plabel(k) + "  [" + k + "]"));
+      var inp;
+      if (meta.type === "boolean") {
+        inp = h("input", ""); inp.type = "checkbox"; inp.checked = !!meta.value;
+      } else if (k === "hvMode") {
+        inp = h("select", "");
+        HVMODES.forEach(function (opt) {
+          var o = h("option", "", opt); o.value = opt; inp.appendChild(o);
+        });
+        inp.value = String(meta.value);
+      } else if (meta.type === "number") {
+        inp = h("input", ""); inp.type = "number"; inp.step = "any"; inp.value = String(meta.value);
+      } else {
+        inp = h("input", ""); inp.type = "text"; inp.value = String(meta.value);
+      }
+      inp.dataset.key = k;
+      f.appendChild(inp);
+      form.appendChild(f);
+    });
+  });
+}
+
+function fieldFor(key) {
+  var fields = document.querySelectorAll("#paramsForm .pfield");
+  for (var i = 0; i < fields.length; i++) {
+    var el = fields[i].querySelector("input,select");
+    if (el && el.dataset.key === key) return el;
+  }
+  return null;
+}
+
+function collectOverrides() {
+  var over = {};
+  Object.keys(PKEY || {}).forEach(function (k) {
+    var el = fieldFor(k);
+    if (!el) return;
+    var val, changed = false;
+    if (el.type === "checkbox") { val = el.checked; changed = val !== PKEY[k].value; }
+    else if (el.tagName === "SELECT") { val = el.value; changed = val !== String(PKEY[k].value); }
+    else if (el.type === "number") { var n = Number(el.value); if (!isFinite(n)) return; val = n; changed = Math.abs(n - PKEY[k].value) > 1e-12; }
+    else { val = el.value; changed = val !== String(PKEY[k].value); }
+    if (changed) over[k] = val;
+  });
+  return over;
+}
+
+function resetParams() {
+  Object.keys(PKEY || {}).forEach(function (k) {
+    var el = fieldFor(k);
+    if (!el) return;
+    if (el.type === "checkbox") el.checked = !!PKEY[k].value;
+    else if (el.tagName === "SELECT") el.value = String(PKEY[k].value);
+    else if (el.type === "number") el.value = String(PKEY[k].value);
+    else el.value = String(PKEY[k].value);
+  });
+  addHist("Parameters reset to engine defaults.");
+}
+
+document.getElementById("paramFilter").addEventListener("input", function () {
+  var q = this.value.toLowerCase();
+  var items = document.querySelectorAll("#paramsForm .pfield, #paramsForm .psec");
+  items.forEach(function (it) {
+    var hide = q && it.textContent.toLowerCase().indexOf(q) === -1;
+    it.style.display = hide ? "none" : "";
+  });
+});
+
+document.getElementById("btnReset").addEventListener("click", resetParams);
+
+function renderCustom(res, withDefault) {
+  var box = document.getElementById("results");
+  box.innerHTML = "";
+  ["full", "first-90", "second-90"].forEach(function (win) {
+    if (!res.windows[win]) return;
+    var w = res.windows[win];
+    var lab = win === "full" ? "Full window" : (win === "first-90" ? "First 90 days" : "Second 90 days");
+    var keys = Object.keys(w);
+    var base = w[keys[0]];
+    box.appendChild(tableFor(lab, keys.map(function (k) { return { label: k, m: w[k], base: base }; })));
+  });
+  var full = res.windows.full;
+  var custom = full["Custom"], def = full["Default (current)"];
+  if (custom && def) addHist(SYM + " custom: " + custom.trades + "t / " + fmtNum(custom.netR) + "R vs default " + def.trades + "t / " + fmtNum(def.netR) + "R (Δ " + fmtNum(custom.netR - def.netR) + "R)");
+  else if (custom) addHist(SYM + " custom: " + custom.trades + "t / " + fmtNum(custom.netR) + "R");
+}
+
+function runCustom(btn, withDefault) {
+  runWith(btn, function () {
+    var variants = [{ label: "Custom", overrides: collectOverrides() }];
+    if (withDefault) variants.push({ label: "Default (current)", overrides: {} });
+    return apiRun({ symbol: SYM, variants: variants, windows: ["full", "first-90", "second-90"] }).then(function (res) {
+      if (res.error) return res;
+      renderCustom(res, withDefault);
+      return res;
+    });
+  });
+}
+
+document.getElementById("btnCustom").addEventListener("click", function () { runCustom(this, false); });
+document.getElementById("btnCustomAB").addEventListener("click", function () { runCustom(this, true); });
+
 loadMeta();
-addHist("Ready. Pick a market, then a test.");
+loadParams();
+addHist("Ready. Pick a market, preset, or custom parameters.");
 </script>
 </body>
 </html>`;
