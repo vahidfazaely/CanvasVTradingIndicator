@@ -28,3 +28,6 @@ Thumbs.db
 # Collected TradingView log lines (local data, not source)
 logs/cvlog.txt
 logs/v4log.txt
+
+# Tooling run logs (local state, not source)
+.freebuff/*.log
