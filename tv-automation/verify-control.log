@@ -1,9 +1,0 @@
-12:40:55 chart ready: true
-12:41:03 monaco visible
-12:41:04 BROKEN: inserting 62 chars...
-12:41:04 BROKEN: insert done, waiting 45s for Monaco...
-12:41:49 BROKEN: add clicked=true; waiting 15s for compile...
-12:42:04 BROKEN diag lines: ["Line 5, Col 1"]
-12:42:04 BROKEN error detected: true
-12:42:42 FATAL: page.click: Timeout 30000ms exceeded.
-12:42:43 closed
