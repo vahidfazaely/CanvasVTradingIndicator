@@ -1,299 +1,189 @@
-# Strategy — CanvasV MTF Signal
+# Strategy — CanvasV V4 FAST
 
-This document describes the **current baseline** (TradingView `v3.4.4`) signal logic precisely. It is a documentation of *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v4.2.0`, Pine `strategy()`) signal logic precisely. It documents *what the code does*, not a proposal.
+
+Pine source: [`TradingView/CanvasV_V4_FAST.pine`](../TradingView/CanvasV_V4_FAST.pine).
+Lite build: [`TradingView/CanvasV_V4_FAST_lite.pine`](../TradingView/CanvasV_V4_FAST_lite.pine) — signal-identical, diagnostics trimmed (see §13).
+Local mirror: [`backtest/engine.mjs`](../backtest/engine.mjs) — every default matches the Pine inputs exactly (see §14 for deliberate gaps).
 
 ---
 
 ## 1. Architecture
 
-| Layer | Source |
+| Stage | Source |
 |---|---|
-| Trend | 4H EMA 50 / EMA 200 + EMA 50 slope |
-| Confirmation | 1H EMA 21 / EMA 50 |
-| Entry trigger | Chart TF (15m / 1H / 4H) EMA 9 / 21 crossover + ADX |
-| Risk | Structural SL + risk validation + R-based TP1/TP2 |
-| Confidence | Weighted score 0–100, minimum 75 |
+| Regime | EMA 50 slope (ATR-normalized) + ATR-vs-average volatility flag |
+| Direction / momentum | EMA 9 / 21 / 50 stack + EMA 9 slope + close vs EMA 21 |
+| Triggers | Pullback-resume **or** breakout (each with quality gates) |
+| Entry quality | Extension limit + candle body + relative volume + high-vol confirmation |
+| Risk | Structural SL + ATR buffer + risk bounds + R-based TP1/TP2 |
+| Strategy | `strategy.entry` / `strategy.exit`, sizing, exits, outcome tracking |
 
-The intended hierarchy is: **4H** = main market direction, **1H** = intermediate momentum confirmation, **entry timeframe** (15m / 1H / 4H) = entry trigger. This is one consistent strategy, not three independent ones.
+The pipeline is `REGIME → DIRECTION → SETUP → TRIGGER → RISK → STRATEGY`. A setup must pass **every** stage. Entries fire only on **confirmed closed candles** (`barstate.isconfirmed`). Everything runs on the chart series (15m-first design, works on any chart TF) — there are no `request.security` calls and no lookahead.
 
-### TradingView timeframe behaviour (signal-engine policy)
-
-The signal engine is gated by `isSupportedSignalTF` — true **only** on 15m, 1H, and 4H charts. On those charts BUY/SELL signals, markers, Entry/SL/TP levels, score labels, and alerts can be generated; on every other timeframe they are **disabled in code** (not merely hidden).
-
-- **15m chart:** signal candle = confirmed 15m candle. The 4H trend and 1H confirmation come from `request.security` with `lookahead = barmerge.lookahead_off`; the entry (EMA cross, ADX, ATR) runs on the 15m chart series.
-- **1H chart:** signal candle = confirmed 1H candle. The 4H trend comes from `request.security`; the 1H confirmation is read from the chart series (`[1]`, so never the forming bar).
-- **4H chart:** signal candle = confirmed 4H candle. The trend is computed on the chart series itself (self mode); signals require `barstate.isconfirmed`, so the currently-forming 4H candle can never fire a signal — the panel reads the trend with `[1]`. Non-repainting by construction.
-- **All other timeframes (1m/3m/5m/30m/2H/6H/12H/1D/1W/custom):** display/context only. The panel shows the chart TF, `SIGNALS DISABLED` (red), and the reason `Use 15m / 1H / 4H`. No signals can be generated or alerted.
-
-### HTF request methodology
-
-Each 4H value is a separate single-line `request.security(syminfo.tickerid, "240", expr, lookahead = barmerge.lookahead_off)` call; the 1H layer uses the same pattern on `"60"`. With `lookahead_off` a value only updates when its HTF candle **completes**: during the forming HTF candle it holds the last closed value and is step-constant (never rewrites history); at the exact HTF boundary bar it is the just-completed candle's final value — confirmed data at that bar's close. The 4H slope baseline `h4e50PrevH` applies `[1]` **inside** the 4H context, i.e. two consecutive confirmed 4H values.
+`cfgOk` sanity gate (blocks all entries when false): `emaTrigLen < emaDirLen < emaSlowLen`, `swingLookback ≥ 2`, `tp1R > 0`, `tp2R > tp1R`, `maxRiskAtr > minRiskAtr`.
 
 ---
 
-## 2. 4H trend
+## 2. Regime
 
-Closed 4H candles only. For BUY:
+Inputs: `regimeBars = 10`, `regimeMinSlope = 0.05`, `atrRegimeLen = 100`, `highVolPct = 130.0`, `atrPeriod = 14`.
 
-- **Trend bullish:** `4H EMA 50 > 4H EMA 200`
-- **Slope confirmation:** `4H EMA 50 (current closed) >= 4H EMA 50 (previous closed)`
+- `regimeSlope = (EMA50 − EMA50[10]) / max(ATR × 10, ε)` — EMA 50 slope in ATR per bar.
+- `trending = |regimeSlope| ≥ 0.05`.
+- `highVol = ATR / SMA(ATR, 100) × 100 ≥ 130`.
+- **Trend up:** `trending AND EMA21 > EMA50 AND EMA50 > EMA50[10]`.
+- **Trend down:** `trending AND EMA21 < EMA50 AND EMA50 < EMA50[10]`.
 
-For SELL (mirrored):
-
-- **Trend bearish:** `4H EMA 50 < 4H EMA 200`
-- **Slope confirmation:** `4H EMA 50 (current closed) <= 4H EMA 50 (previous closed)`
-
-The slope compares two **consecutive closed 4H candles** (never the forming 4H candle).
+A flat EMA 50 (equal 10 bars ago) satisfies neither direction → ranging → no signal.
 
 ---
 
-## 3. 1H confirmation
+## 3. Direction + momentum (setup)
 
-Closed 1H candles only, EMA fast/slow default 21/50:
+Inputs: `emaTrigLen = 9`, `emaDirLen = 21`, `emaSlowLen = 50`, `momSlopeBars = 3`.
 
-- **Bullish confirmation:** `1H EMA 21 > 1H EMA 50`
-- **Bearish confirmation:** `1H EMA 21 < 1H EMA 50`
-
-On charts below 1H this comes from `request.security(..., "60", lookahead_off)`; on the 1H chart itself it is read from the chart series (never the forming bar). The 1H alignment replaces the old "momentum" scoring component — the signal now requires the intermediate timeframe to agree with the direction before an entry can score.
-
----
-
-## 4. EMA 9/21 entry (chart TF)
-
-On a **supported signal timeframe (15m / 1H / 4H)**, with `emaF = EMA 9`, `emaS = EMA 21` computed on the chart series:
-
-- **Bullish crossover:** `emaF[previous] <= emaS[previous] AND emaF[current] > emaS[current]`
-- **Bearish crossover:** `emaF[previous] >= emaS[previous] AND emaF[current] < emaS[current]`
-
-Evaluated only on **closed candles**. The crossover is a hard requirement of the signal (it gates), but no longer contributes points itself — its former weight now belongs to the 1H confirmation component.
+- **Momentum up:** `EMA9 > EMA9[3] AND close ≥ EMA21`.
+- **Momentum down:** `EMA9 < EMA9[3] AND close ≤ EMA21`.
+- **Setup long** = trend up + momentum up. **Setup short** = trend down + momentum down.
 
 ---
 
-## 5. ADX filter
+## 4. Triggers
 
-- `ADX = ta.dmi(period, period)` main line (Wilder's ADX; Pine has no `ta.adx`), computed on the **chart series (15m / 1H / 4H)**.
-- Defaults: period 14, minimum 18.0 (hard gate since v2.5.0).
-- The ADX value of the **closed signal candle** is used.
-- Weight configurable; set to 0 to disable the ADX component.
+Either trigger can fire; both are AND-combined with the setup.
 
-## 6. Optional filters (TradingView; all OFF by default)
+### 4a. Pullback resume
 
-| Filter | Rule (BUY example) | Default |
+Inputs: `enablePullback = true`, `pullbackLookback = 5`, `pullbackTolPct = 0.5`.
+
+- **Long:** `lowest(low, 5)[1] ≤ EMA21 × 1.005` (touched the direction EMA within tolerance, signal bar excluded) **AND** `close > EMA9 AND close[1] ≤ EMA9[1]` (close reclaims the trigger EMA).
+- **Short:** mirrored (`highest(high, 5)[1] ≥ EMA21 × 0.995`, close loses EMA 9).
+
+### 4b. Breakout
+
+Inputs: `enableBreakout = true`, `breakoutBars = 10`, plus the Breakout Quality group (§6).
+
+- **Long:** `close > highest(high, 10)[1] + ATR × 0.10` (prior range excluded the signal bar, plus ATR buffer).
+- **Short:** mirrored below `lowest(low, 10)[1]`.
+- Plus close-location, extension, and volume gates (§5–§7).
+
+---
+
+## 5. Entry quality
+
+Inputs: `maxExtAtr = 1.5`, `useStrictExt = true`, `minBodyPct = 0.0` (off).
+
+- **Extension guard:** `|close − EMA21| / ATR ≤ 1.5` (both triggers). Hard reject when strict mode is on.
+- **Candle body:** when `minBodyPct > 0`, requires directional close (`close > open` for long) and `body/range × 100 ≥ min`.
+- `closeLocation = (close − low) / (high − low)` (0.5 for a zero-range bar) feeds the breakout and high-vol gates.
+
+---
+
+## 6. Breakout quality (Phase 3)
+
+Inputs: `enableBtBuffer = true`, `breakoutBuffer = 0.10`, `enableCloseLoc = true`, `closeLocMinLong = 0.70`, `closeLocMinShort = 0.30`, `enableBtExtFilter = true`, `breakoutExtAtr = 2.0`.
+
+Breakout entries additionally require:
+
+1. **ATR buffer** — close clears the range by `0.10 × ATR` (§4b).
+2. **Close location** — long: `closeLocation ≥ 0.70`; short: `closeLocation ≤ 0.30`.
+3. **Extension filter** — within `2.0 ATR` of EMA 21. Under defaults this is subsumed by the stricter global 1.5 ATR gate, so it only binds when strict mode is off or set tighter (avoids double-counting rejections in funnels).
+
+---
+
+## 7. Volume (Phase 4)
+
+Inputs: `enableRelVol = true`, `volLookback = 20`, `volMinBreakout = 1.20`, `volMinPullback = 1.10`.
+
+`relVol = volume / SMA(volume, 20)`. Breakout triggers need `relVol ≥ 1.20`; pullback triggers need `relVol ≥ 1.10`. Missing volume data (`na`) passes the gate (fail-open).
+
+---
+
+## 8. High volatility (Phase 5)
+
+Inputs: `hvMode = "Stronger Confirmation"`, `hvVolMin = 1.40`, `hvCloseLocLong = 0.75`, `hvCloseLocShort = 0.25`.
+
+When `highVol` is true (ATR ≥ 130% of its 100-bar average):
+
+| Mode | Behavior |
+|---|---|
+| `Allow` | No extra requirement. |
+| `Stronger Confirmation` (default) | Entries need `relVol ≥ 1.40` (missing volume **fails** here) **and** close location ≥ 0.75 long / ≤ 0.25 short. |
+| `Block` | All entries rejected (`HV BLOCKED`). |
+| `Reduce Risk` | Accepted upstream (reserved: Pine currently applies no size change). |
+
+---
+
+## 9. Risk model
+
+Inputs: `swingLookback = 10`, `structBufferAtr = 0.5`, `minRiskAtr = 0.5`, `maxRiskAtr = 4.0`, `tp1R = 1.0`, `tp2R = 2.5`, `atrFallbackMult = 1.5` (fixed), `atrStopMult = 1.5`.
+
+- **Entry** = signal candle close.
+- **Structural SL** = `lowest(low, 10)[1] − 0.5·ATR` (long) / `highest(high, 10)[1] + 0.5·ATR` (short). The `[1]` excludes the signal bar.
+- **Volatility buffer:** SL is pushed a further `atrStopMult × ATR` (1.5) beyond structure.
+- **Fallback:** structural risk < 0.5 ATR (or invalid) → fixed `1.5·ATR` stop. Never blocks the signal.
+- **Hard risk gate:** risk > 4.0 ATR → setup **rejected** (`RISK TOO WIDE` / `INVALID STRUCTURE`). SL must also be on the correct side of entry with usable ATR.
+- **Targets:** TP1 = Entry ± 1.0R, TP2 = Entry ± 2.5R — multiples of actual risk, never of ATR.
+
+---
+
+## 10. Position sizing (Phase 2)
+
+Inputs: `enableFixedRisk = true`, `riskPerTrade = 0.5`, `maxPosSize = 0.0` (no cap).
+
+`qty = equity × risk% / stop distance`, floored to 4 decimals, optionally capped. When disabled, Pine falls back to `default_qty_value = 1`. Strategy account: $10,000 initial capital, 0.04% commission, 1-tick slippage.
+
+---
+
+## 11. Execution (Phase 3)
+
+Entries go through `strategy.entry("Long"/"Short")` with a one-shot bar guard; an opposite-direction entry reverses the position (counted as `SUPERSEDED`).
+
+| Exit | Default | Rule |
 |---|---|---|
-| EMA separation | `(emaF − emaS)/emaS × 100 ≥ min` | off, min 0.05 % |
-| Price vs EMA 21 | `close ≥ emaS` | off |
-| H4 momentum | `close ≥ H4 EMA(21)` | off |
-| ATR volatility | `ATR/close × 100 ≥ min` | off, min 0.05 % |
-| Volume | `volume ≥ SMA(volume, 20) × ratio` | off, ratio 1.0 |
+| Partial TP (50% TP1 / 50% TP2) | off | `enablePartialTP` |
+| Break-even after TP1 fill | off | `enableMoveBE` (needs partial TP) |
+| Mid-trade break-even | off | `enableMidTradeBE`: after 10 bars, profit ≥ +0.25R → SL to entry |
+| **Stale-trade exit** | **on** | After 15 bars, position within −0.25R…+0.25R → close at market |
+| **Time expiry** | **on** | After 20 bars → close at market |
+| Session filter | off | `0800-1700:23456` (Mon–Fri) when enabled |
 
-SELL rules are mirrored (`close ≤ emaS`, `close ≤ H4 EMA`, etc.). There are two distinct roles:
-
-- **Gate conditions** — the signal does not fire unless the filter passes. This applies to the H4 trend and the EMA crossover (always gates) and to every optional filter when enabled (separation, price vs EMA 21, H4 momentum) or when its weight is > 0 (volatility, volume).
-- **Scoring components** — volatility and volume add points (`atrVolWeight`, `volWeight`) when their condition passes. Separation / price vs EMA 21 / H4 momentum have no weight inputs, so they gate but never score.
-
-Setting a weight to 0 disables both the gate and the points for that component.
+The stale exit and expiry have no off switch — they always apply.
 
 ---
 
-## 7. Phase 1 quality gates (v2.5.0)
+## 12. Outcomes, MFE/MAE, diagnostics
 
-Hard gates — any failure blocks the signal **regardless of score**. The existing score model is kept unchanged in v2.5.0 so the gate effect can be measured in isolation (a structural SL/TP and new scoring model come in later phases).
-
-| Gate | BUY rule | SELL rule | Default |
-|---|---|---|---|
-| 4H REGIME | EMA50 > EMA200 AND EMA50 > EMA50[prev] AND separation ≥ min | mirrored (strict <) | separation ≥ 0.10% |
-| 1H CONFIRMATION | 1H EMA21 > EMA50 | 1H EMA21 < EMA50 | — |
-| 1H MOMENTUM | 1H close ≥ 1H EMA21 | 1H close ≤ 1H EMA21 | on |
-| ENTRY STRUCTURE | EMA9 > EMA21 AND close ≥ EMA9 | EMA9 < EMA21 AND close ≤ EMA9 | — |
-| EMA GAP EXPANSION | (EMA9−EMA21) > previous gap | mirrored | on |
-| CANDLE QUALITY | close > open AND body ≥ 50% of range | mirrored | body ≥ 50% |
-| ADX FLOOR | ADX ≥ 18 | same | 18 |
-| VOLATILITY FLOOR | ATR/close ≥ 0.05% | same | 0.05% |
-| CHASING | \|close − EMA9\|/ATR ≤ 1.5 | mirrored | 1.5 ATR |
-
-A **flat 4H slope** (EMA50 == EMA50[prev]) counts for neither direction → `NEUTRAL` regime → no signal. A **converged regime** (separation below the minimum) is likewise rejected.
-
-In **Audit Mode**, a rejected candidate setup shows the **first failed gate** in the `REASON` row (`4H REGIME` / `1H CONFIRMATION` / `1H MOMENTUM` / `ENTRY STRUCTURE` / `CANDLE QUALITY` / `ADX` / `VOLATILITY` / `CHASING` / `OPTIONAL FILTERS` / `ATR INVALID` / `SCORE TOO LOW` / `RISK TOO LARGE` / `INVALID STRUCTURE`), distinguishing "setup rejected" from "setup passed but score too low" and from "position rejected by the risk gate".
+- **Outcomes:** `TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`, classified from the exit price vs the tracked levels. Counters feed the DEBUG panel and decisions log.
+- **MFE/MAE** tracked in R for the open position; per-trade R recorded at close.
+- **Post-SL observation** (default 10 bars): after an `SL FIRST` exit, tracks max favorable excursion in R — *"did price move our way after the stop?"* Reported in the decisions log, a DEBUG label, and a `V4POST|` alert.
+- **Alerts (all off by default):** entry alerts; diagnostic `V4LOG|` (signal/rejection with `T=` bar time), `V4OUT|` (resolution: outcome, bars, MFE/MAE, R, entry); `alertcondition("CanvasV V4 BUY"/"SELL")` for TradingView alert dialogs.
+- **Visuals:** `NORMAL` mode = regime-colored EMA 21 trend line, ▲/▼ markers, Entry/SL/TP lines, compact 11-row panel. `DEBUG` adds the raw EMA set, a 15-row research panel (regime/setup/reason/RISK-RR/position/outcomes/W-L), the 12-line decisions log, and per-signal record labels. Signal logic is identical in both modes.
 
 ---
 
-## 8. Scoring
+## 13. Lite build
 
-Each component contributes its weight when satisfied:
+`TradingView/CanvasV_V4_FAST_lite.pine` (`v4.2.0-lite`) trims **diagnostics only**: no `visualMode`/`DEBUG` mode, no decisions log, no `V4LOG`/`V4OUT`/`V4POST` alerts, no post-SL window. Verified signal-identical to the full build:
 
-| Component | Default weight | BUY condition | SELL condition |
-|---|---|---|---|
-| Trend | 25 | 4H bullish | 4H bearish |
-| 1H Confirmation | 25 | 1H EMA 21 > EMA 50 | 1H EMA 21 < EMA 50 |
-| ADX | 25 | ADX ≥ minimum | ADX ≥ minimum |
-| Slope | 25 | 4H EMA 50 rising | 4H EMA 50 falling |
-| Volatility | 0 | ATR regime ok | ATR regime ok |
-| Volume | 0 | Volume ok | Volume ok |
-
-`maxScore = sum of enabled weights` (default 100). A disabled component contributes 0 to both score and max.
-
-**Config validation:** signals are suppressed when the inputs are internally inconsistent:
-
-- any EMA Fast ≥ its Slow (4H, 1H, or M15 entry),
-- the **risk inputs** are inconsistent (`Swing lookback < 2`, `Structure buffer < 0`, `Minimum risk ≤ 0`, `Maximum risk ≤ Minimum risk`, `TP1 R ≤ 0`, or `TP2 R ≤ TP1 R`),
-- all weights are 0 (`maxScore = 0`),
-- `MinimumScore > maxScore`.
-
-The panel header then reads `CONFIG ERROR` and the bottom row shows the reason (`EMA fast >= slow`, `risk config invalid`, `all weights are 0`, `min score > max`). Weight inputs are clamped to ≥ 0 in the settings UI, so negative weights are not possible.
+- `node scripts/check-pine-parity.mjs` — 95 identifiers + 50 inputs match.
+- `backtest/engine/output/V4-LITE-HOLDOUT90.md` — zero divergences across 3 symbols × 3 windows.
 
 ---
 
-## 9. Signal conditions
+## 14. Local engine parity
 
-**BUY** (exact):
+`backtest/engine.mjs` reproduces the Pine v4.2.0 signal logic: every `DEFAULT_PARAMS` value equals its Pine input default (verified by direct extraction; no engine-only keys). Indicator math matches Pine `ta.*` semantics (EMA seed = SMA, Wilder RMA for ATR, `[1]`-shifted rolling extremes, NaN-safe warmup).
 
-```
-chart timeframe is supported (15m / 1H / 4H)   // isSupportedSignalTF
-AND 4H regime bullish (EMA50 > EMA200 AND strict rising slope AND separation ≥ 0.10%)
-AND 1H confirmation (1H EMA21 > EMA50)
-AND 1H momentum (1H close ≥ 1H EMA21)
-AND entry structure (EMA9 > EMA21 AND close ≥ EMA9 AND gap expanding)
-AND bullish crossover (chart TF)
-AND candle quality (close > open AND body ≥ 50% of range)
-AND ADX ≥ 18
-AND ATR/close ≥ 0.05%
-AND |close − EMA9|/ATR ≤ 1.5
-AND all enabled optional gates pass
-AND score ≥ MinimumScore (default 75)
-AND valid position risk (risk ≤ MaximumRiskATR × ATR; structural SL from `lowest(low, 10)[1] − 0.5·ATR` or its documented fallback)
-```
+Deliberate differences (documented in the engine header):
 
-**SELL** (exact): mirrored.
-
-**STRONG BUY** (optional, default on):
-
-```
-BUY conditions
-AND score ≥ StrongScore (default 100)
-```
-
-**STRONG SELL**: mirrored. STRONG uses the same Entry/SL/TP levels as the base signal.
+- **Not modeled:** partial TP, break-even-after-TP1, session filter, commission/slippage (all default-off or strategy-account concerns in Pine).
+- **Engine extras:** `AMBIGUOUS` outcome (SL+TP hit on the same bar — Pine can only classify by exit price) and an explicit `STALE_EXIT` outcome (Pine folds these into `EXPIRED`); `opts.audit` per-bar funnel capture; opt-in early-pullback experiments (`firstDip` / `slowDip`, default off, production trigger is reclaim-only).
+- Position sizing is computed against a fixed $10k equity; compounding appears only in the account-% drawdown metric.
 
 ---
 
-## 10. Position / risk engine (v3.1.0)
+## 15. Version note
 
-Replaces the old fixed ATR-multiplier model. Entry = `close` of the confirmed signal candle.
-
-### Structural SL
-
-BUY: `SL = lowest(low, SwingLookback)[1] − ATR × StructureBufferATR`
-
-SELL: `SL = highest(high, SwingLookback)[1] + ATR × StructureBufferATR`
-
-The `[1]` is mandatory — the swing uses **previously completed entry-timeframe bars only**, so the forming signal candle can never define its own structural stop (chart series only, no `request.security`, no lookahead). Defaults: lookback 10, buffer 0.5×ATR.
-
-### Risk
-
-`Risk = |Entry − SL|` (always positive for a valid position). `RiskATR = Risk / ATR` (safe division).
-
-### Minimum-risk fallback
-
-If the structural stop is **too tight or invalid** (`Risk < MinimumRiskATR × ATR`, e.g. the swing is inside the ATR buffer), the model does **not** reject the signal — it falls back to the documented ATR stop: BUY `SL = Entry − 1.5×ATR`, SELL `SL = Entry + 1.5×ATR`, then recalculates Risk/RiskATR. The final SL is always strictly below Entry (BUY) / above Entry (SELL).
-
-### Maximum-risk rejection (hard gate)
-
-If `Risk > MaximumRiskATR × ATR` (default 2.5), the setup is **rejected**: no marker, no Entry/SL/TP levels, no score label, no alert, and no last-signal-state update. Audit Mode shows `RISK TOO LARGE` (or `INVALID STRUCTURE` / `ATR INVALID` for the other risk-gate failures). This is a hard gate, not a score adjustment.
-
-### ATR safety
-
-If ATR is `na` or zero, no position is computed — the signal is rejected (`ATR INVALID`). No division by zero, no manufactured risk value.
-
-### R-based take-profits
-
-TPs are computed from the **actual risk**, never from ATR:
-
-BUY: `TP1 = Entry + Risk × TP1_R`, `TP2 = Entry + Risk × TP2_R`
-
-SELL: `TP1 = Entry − Risk × TP1_R`, `TP2 = Entry − Risk × TP2_R`
-
-Defaults `TP1_R = 1.0`, `TP2_R = 2.5`, so TP1 = exactly 1R and TP2 = exactly 2.5R. The displayed R:R is **calculated from the prices** (`(TP1 − Entry)/Risk`, `(TP2 − Entry)/Risk`), so it always stays correct if the R-multiple inputs change.
-
----
-
-## 11. Closed-candle discipline / no repaint
-
-- Signals are only evaluated when `barstate.isconfirmed` (live bar) or on fully closed historical bars.
-- **H4 methodology:** each H4 value is a separate `request.security(syminfo.tickerid, "240", expr, lookahead = barmerge.lookahead_off)` call. With `lookahead_off` the value only updates when an H4 candle **completes**: during the forming H4 candle it holds the last closed H4 value and is step-constant (never rewrites history); at the exact H4 boundary bar it is the just-completed candle's final value, which is confirmed data at that bar's close. The slope baseline `h4e50PrevH` applies `[1]` **inside** the H4 context — one H4 candle before the last closed one, i.e. two consecutive confirmed H4 values.
-- **4H self mode:** on the 4H chart the trend is the chart's own EMA series. Intra-bar it moves with the forming candle's ticks, but signals require `barstate.isconfirmed`, so only the **closed candle's** final values are ever used — a forming 4H candle can never fire a signal. The slope baseline is the previous closed 4H candle.
-- **Structural SL:** `lowest(low, N)[1]` / `highest(high, N)[1]` use only previously completed bars — the forming signal candle is excluded, so changing its low/high can never retroactively move the stop. Final Entry/SL/TP/Risk are deterministic after candle close; reloading reproduces the same values.
-- Arrows, level lines, labels and alerts are created once per signal from closed data and are never re-evaluated; the latest-signal state (including Risk and R:R) is frozen in `var` variables and replaced only by a newer confirmed signal.
-- There is no `lookahead_on` anywhere in the code.
-
----
-
-## 12. Defaults summary
-
-| Input | Default |
-|---|---|
-| 4H EMA Fast / Slow | 50 / 200 |
-| 1H EMA Fast / Slow | 21 / 50 |
-| Entry EMA Fast / Slow (chart TF) | 9 / 21 |
-| Supported signal timeframes | 15m / 1H / 4H |
-| ADX weight / period / minimum (gate) | 25 / 14 / 18.0 |
-| ATR period | 14 |
-| Swing lookback | 10 |
-| Structure buffer (ATR) | 0.5 |
-| Minimum risk (ATR) | 0.5 |
-| Maximum risk (ATR) | 2.5 |
-| TP1 / TP2 R multiple | 1.0 / 2.5 |
-| Trend / 1H Conf / Slope weights | 25 / 25 / 25 |
-| Minimum score | 75 |
-| STRONG enabled / threshold | on / 100 |
-| Min 4H regime separation | 0.10% |
-| Require EMA gap expansion | on |
-| Min candle body | 50% |
-| Min volatility (ATR %) | 0.05% |
-| Max entry distance (ATR) | 1.5 |
-| Optional filters | all off |
-| Alerts | off |
-
-## 14. Signal Decision Logger (v3.3.0) — observational, not a backtest
-
-The diagnostic system is a **data-collection tool** that observes the existing engine. It never alters the signal decision. The master input is `Signal Decision Logger` (Visuals group, default off); when off the script is byte-identical to v3.3.0 except the version string (v3.4.0 added presentation-only color/layout changes).
-
-- **Candidate definition:** a **candidate** is a confirmed candle on a supported timeframe (15m/1H/4H) with a fresh EMA 9/21 crossover (BUY) or crossunder (SELL) — the existing entry trigger. Candles without a crossover are not logged (no flood of irrelevant bars).
-- **First-failure chain:** candidates are evaluated in the engine's actual order and the **first failing condition** is recorded: `4H REGIME` → `4H SLOPE` → `4H SEPARATION` → `1H STRUCTURE` → `1H MOMENTUM` → `ENTRY STRUCTURE` → `ENTRY POSITION` → `EMA EXPANSION` → `NO TRIGGER` → `CANDLE DIRECTION` → `CANDLE BODY` → `ADX` → `VOLATILITY` → `CHASING` → `OPTIONAL FILTERS` → `ATR INVALID` → `SCORE` → `RISK TOO LARGE` / `INVALID STRUCTURE` (SELL mirrored). `NO TRIGGER` is defined for completeness; logged candidates always have a trigger, so it cannot be the first failure of a logged event. The chain distinguishes **rejected before scoring** (gate failure) from **all gates passed but score insufficient** (`SCORE`) from **signal fired** (`DECISION = BUY/SELL`).
-- **Event logger:** every candidate is recorded with the exact values the engine used — 4H regime (EMA50/200, separation %, slope direction), 1H (EMA21/50, close, structure/momentum), entry (EMA9/21, gap + previous gap, gap expansion), candle (direction, body %, range), quality (ADX, ATR, ATR%, chasing distance), full score breakdown, and position (Entry/SL/TP1/TP2/Risk/RiskATR/R:R). All values are the existing engine variables — nothing is recalculated.
-- **Gate-status table:** `— GATE STATUS —` shows PASS/FAIL/N/A for every gate of the latest candidate, plus the score and the decision.
-- **Decision statistics:** `— DIAGNOSTIC STATS —` counts candidates, signals, rejections, and per-reason rejection buckets — answering *which filter kills the most setups* (observation only; filters are NOT changed based on it).
-- **Outcome tracking:** accepted signals are frozen (time, direction, Entry, SL, TP1, TP2, Risk) and followed across the next `Outcome tracking bars` **confirmed entry-TF candles after the signal bar**. MFE/MAE are computed in R from the signal's own Risk. Outcome is classified `SL FIRST` / `TP1 FIRST` / `TP2 FIRST` / `AMBIGUOUS` (SL and a TP touched inside the same candle — order unknowable from OHLC) / `EXPIRED` / `SUPERSEDED`. These values use only candles **after** the signal and never feed back into the signal decision.
-- **Phase 4A market-context fields (v3.4.1, observation only):** each logged event also captures **H4 slope magnitude** (`(h4e50 − h4e50Prev)/h4e50Prev × 100`, the same confirmed series the strict slope gate uses), **H4 separation magnitude** (`|EMA50−EMA200|/EMA200 × 100`, same formula as the 0.10% gate), **price distance from the 4H EMA50 in ATR** (`|entry − h4e50|/ATR`), an **ATR volatility regime** — current ATR as a % of its own N-bar SMA (`atrHistLen`, default 200, Diagnostics group), banded `<80% LOW, 80–120% NORMAL, 120–160% HIGH, ≥160% EXTREME` (a transparent ratio, not a true percentile; documented) — **1H confirmation freshness** (entry-TF bars since the confirmed 1H EMA21-vs-EMA50 state last updated; on a 15m chart it cycles 0–3 per 1H candle, so `0` = fresh), **bars since the previous signal** (`N/A` when none, tracked while the logger is on), and — at **resolution** — outcome bars + elapsed minutes, the H4 and 1H state at the resolution candle, and whether the original directional alignment is still `INTACT` (4H + 1H still aligned with the trade) or `BROKEN`. These appear in the `— DECISION LOG —` `— CONTEXT —` / `— RESOLUTION —` sections and the `— DIAGNOSTIC STATS —` averages/outcomes rows. None of them feed back into any gate, score, or signal; the signal decision is byte-identical to v3.4.0.
-- **Historical behavior:** the logger runs on historical candles too — scrolling back shows the same decisions; reload replays them deterministically from the same confirmed data. History is bounded (`Diagnostic history size`, default 20).
-- **Pine persistence limitation:** Pine cannot write files, so the log is bounded in-script arrays shown in tables, plus optional `CVLOG` alerts for external copy-paste.
-- **Not a backtest:** no `strategy()`, no orders, no position sizing, no account simulation, no profitability claims.
-
-## 15. UI / color system (v3.4.0) — presentation only
-
-v3.4.0 is a **presentation-only release**: colors and layout changed, trading logic did not. All signal conditions, gates, scores, position math, alerts, timeframe policy, and repaint safeguards are byte-identical to v3.3.0.
-
-- **Semantic color roles (only five):** GREEN = bullish / BUY / PASS · RED = bearish / SELL / FAIL · WHITE = primary neutral values · SILVER = secondary / context / labels · blue/orange = EMA line identification only (fast lines blue, slow lines orange). No `lime`, `teal`, `fuchsia`, or blue-as-direction remain.
-- **Markers and score label:** BUY / STRONG BUY markers and the BUY score label are green; SELL / STRONG SELL and the SELL score label are red. The score itself is never colored by range.
-- **Position levels:** ENTRY white/neutral, SL red, TP1 and TP2 share one directional color (green for a BUY position, red for a SELL position).
-- **Info panel (11 rows):** CANVASV MTF SIGNAL + version · TREND (green/red/silver) · SIGNAL (large, green/red/silver) · SCORE (neutral) · ENTRY · SL · TP1 · TP2 · RISK · R:R · one context footer (`15M SIGNAL · 1H BULLISH · ADX 35.8` + `ENABLED`/`DISABLED`). The footer turns red with the reason on blocked timeframes (`5M · SIGNALS DISABLED · Use 15m / 1H / 4H`) or config errors — no blank rows on normal charts.
-- **Debug tables** (Signal Audit Mode, Signal Decision Logger): content unchanged; PASS = green, FAIL = red, N/A / context = silver, primary values = white. All diagnostic functionality remains available and fully hidden when the modes are off.
-
-## 16. Signal Sensitivity presets (v3.4.4) — frequency tuning
-
-The `Signal Sensitivity` input (default **Conservative**) selectively relaxes SECONDARY confirmation filters so more 15m setups can print. It does this by parameterizing the existing gate thresholds — no parallel engine, no new signal path.
-
-| Filter | Conservative | Balanced | Aggressive |
-|---|---|---|---|
-| 4H slope gate | strict `>` | flat allowed `>=` | not required (direction + separation still required) |
-| 1H structure / momentum tolerance | 0% | 0.5% | 1.0% |
-| Candle body % | `minBodyPct` (50) | 40 | 30 |
-| ADX floor | `adxMin` (18) | `adxMin − 3` (15) | `adxMin − 6` (12) |
-| Chase distance (ATR) | `maxEntryDist` (1.5) | 2.0 | 2.5 |
-| Volatility floor % | `minVolPct` (0.05) | 0.04 | 0.03 |
-| Score slope (STRONG tier) | strict | strict | strict |
-
-**Never relaxed by any preset:** 4H direction (EMA50/200), 4H separation, entry structure / gap expansion, optional filters, `minScore` (75), structural SL, max-risk gate, TP/RR, repaint protection, `request.security` calls, alerts. Presets only relax — they never tighten below what the user configured. In Conservative every effective threshold equals its input, so the signal decision is byte-identical to v3.4.3.
-
-The score keeps the STRICT 4H slope, so flat / un-gated-slope setups score 75 and print as regular BUY/SELL; 100/STRONG still requires a genuinely rising/falling 4H plus full alignment.
-
-
+V4 is a single-timeframe strategy line. The retired V3 MTF indicator (4H trend + 1H confirmation + 15M entry, `MyBuySellIndicator.pine`) is described in [`Changelog.md`](Changelog.md) for history but is **not shipped** in this repository — only the V4 line is present.

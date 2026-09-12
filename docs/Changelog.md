@@ -1,6 +1,65 @@
 # Changelog
 
-All notable changes to CanvasV MTF Signal.
+All notable changes to CanvasV V4 FAST.
+
+> **Repository note:** this checkout ships only the V4 line (`TradingView/CanvasV_V4_FAST*.pine`).
+> The V3 MTF indicator file (`TradingView/MyBuySellIndicator.pine`) and the `16d6e9e` /
+> `v3.4.4-legacy` baseline referenced below are not present in this repository's history —
+> the V3 entries are kept as design history only.
+
+## v4.2.0 — V4 FAST: `strategy()` conversion + research stack (sizing, quality, volume, HV)
+
+Date: 2026-09-12 (entry written retrospectively — documents the v4.2.0 code as shipped)
+
+**Major release.** The V4 engine becomes a real TradingView `strategy()` with broker-style position
+management, fixed-risk sizing, and the full Phase 2–5 research stack. Signal *structure*
+(REGIME → DIRECTION → SETUP → TRIGGER → RISK) is unchanged, but several thresholds moved —
+see "Changed" below. New companion file `TradingView/CanvasV_V4_FAST_lite.pine`
+(`v4.2.0-lite`): signal-identical, diagnostics-only trims for fast compile.
+
+Added:
+
+- **`strategy()` conversion.** Entries via `strategy.entry("Long"/"Short")` with a one-shot bar guard;
+  exits via `strategy.exit` / `strategy.close`; outcomes read back from `strategy.closedtrades`.
+  Account: $10k capital, 0.04% commission, 1-tick slippage. Opposite-direction entries reverse
+  the position (counted as `SUPERSEDED`).
+- **Position sizing (Phase 2):** fixed-risk `qty = equity × risk% / stop distance` (default 0.5%,
+  floored to 4 decimals), optional max-size cap.
+- **Breakout quality (Phase 3):** 0.10 ATR range buffer, close-location filter (≥ 0.70 long /
+  ≤ 0.30 short), breakout extension filter (2.0 ATR, subsumed by the stricter global gate
+  under defaults).
+- **Volume filter (Phase 4):** relative volume vs 20-bar average — ≥ 1.20 breakouts, ≥ 1.10
+  pullbacks (fail-open on missing data).
+- **High-volatility modes (Phase 5):** `Allow` / `Stronger Confirmation` (default: relVol ≥ 1.40
+  + close location ≥ 0.75 / ≤ 0.25) / `Block` / `Reduce Risk`.
+- **Execution (Phase 3):** optional 50/50 partial TP, break-even after TP1 fill, mid-trade
+  break-even (+0.25R after 10 bars) — all off by default. **Always on:** stale-trade exit
+  (flat ±0.25R after 15 bars → market) and time expiry (20 bars). Optional session filter
+  (`0800-1700:23456`, off by default).
+- **Local backtest engine** (`backtest/engine.mjs`): dependency-free Node.js mirror of the v4.2.0
+  signal logic — every default matches the Pine inputs exactly — plus the runner, Web Test Lab,
+  sweep/compare tools, and the full audit/report suite (`backtest/engine/output/`).
+- **NORMAL panel is now 11 rows** (adds TRIGGER + W/L); DEBUG panel is 15 rows with the
+  research rows (REASON, RISK/RR, POSITION, OUTCOMES, WIN/LOSS with win/loss ratio).
+
+Changed (vs the documented v4.1.0 spec):
+
+- **Risk model:** structural SL now adds a further `atrStopMult` (1.5) × ATR volatility buffer
+  beyond the 0.5 ATR structure buffer; **max risk 2.5 → 4.0 ATR** (fallback 1.5 ATR, min-risk
+  0.5 ATR, TP1 1.0R / TP2 2.5R unchanged).
+- **Extension guard:** default max entry extension **2.5 → 1.5 ATR** (strict mode on by default);
+  new optional minimum candle-body % (default 0 = off).
+- **Rejection reasons** updated to the strategy pipeline (`REJECT: EXTENDED`, `CANDLE BODY`,
+  `RISK TOO WIDE` / `INVALID STRUCTURE`, `HV BLOCKED`, `OUTSIDE SESSION`, …).
+
+Baselines (CUR defaults, full 15m window, local engine): **BTC 36 trades / +6.43R ·
+ETH 39 trades / +4.75R · SOL 29 trades / +3.96R**. Parity: full-vs-lite zero divergences
+across 3 symbols × 3 windows (`V4-LITE-HOLDOUT90.md`).
+
+Unchanged: confirmed-bar-only entries (`barstate.isconfirmed`), zero `request.security`,
+zero `lookahead_on`, `[1]`-shifted swing/range lookups, MFE/MAE in R, post-SL observation,
+`V4LOG` / `V4OUT` / `V4POST` diagnostic alerts (all off by default), NORMAL/DEBUG
+signal-identity.
 
 ## v4.1.0 — V4 FAST: NORMAL/DEBUG visual mode + SL post-exit diagnostics
 

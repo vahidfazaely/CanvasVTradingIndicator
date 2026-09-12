@@ -10,7 +10,7 @@
 //|  Position management uses strategy.entry / strategy.exit.         |
 //|  No request.security, no repaint risk beyond bar-level exec.     |
 //|                                                                  |
-//|  v5.0.0 — strategy() conversion + Phase 3 enhancements          |
+//|  v4.2.0 — strategy() conversion + Phase 3 enhancements          |
 //+------------------------------------------------------------------+
 strategy("CanvasV V4.2 FAST Strategy", shorttitle = "CanvasV V4.2", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 50, calc_on_every_tick = false, process_orders_on_close = false)
 
