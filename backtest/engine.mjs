@@ -1,12 +1,11 @@
 // CanvasV V4 FAST — Local Signal Engine
-// Faithfully reproduces the TradingView Pine Script v4.3.0 signal logic
+// Faithfully reproduces the TradingView Pine Script v4.2.0 signal logic
 // (all DEFAULT_PARAMS match the Pine input defaults exactly).
 // Single-timeframe only (no MTF/security calls in production).
 // Deliberate gaps vs Pine (all default-OFF execution extras in the .pine):
 //   partial TP, break-even-after-TP1, session filter, commission/slippage.
 // The engine additionally reports AMBIGUOUS (SL+TP same bar) and STALE_EXIT
 // outcomes, which the Pine strategy classifies by exit price alone.
-// v4.3.0: TP exits credit exact limit R (tp1R/tp2R), matching TV limit fills.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -44,7 +43,7 @@ export const DEFAULT_PARAMS = {
   tp1R: 1.0,
   tp2R: 2.5,
   atrFallbackMult: 1.5,
-  atrStopMult: 1.25,
+  atrStopMult: 1.5,
 
   // Position Sizing (Phase 2)
   enableFixedRisk: true,
@@ -475,13 +474,10 @@ export function runEngine(candles, params = DEFAULT_PARAMS, opts = {}) {
         finalR = Math.abs(posSL - posEntry) < 0.01 ? 0.0 : -1.0;
       } else if (tp2Hit) {
         outcome = "TP2 FIRST";
-        // Limit fill (v4.3.0): TradingView fills limit orders at the limit price.
-        // Close-based credit added ~0.25R random noise per TP trade — validated
-        // 132/132 exit reasons identical before/after; only TP R changed.
-        finalR = p.tp2R;
+        finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
       } else if (tp1Hit) {
         outcome = "TP1 FIRST";
-        finalR = p.tp1R;
+        finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
       } else if (posAge >= p.outcomeBars) {
         outcome = "EXPIRED";
         finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);

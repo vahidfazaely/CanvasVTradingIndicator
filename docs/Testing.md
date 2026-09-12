@@ -1,6 +1,6 @@
 # Testing — CanvasV V4 FAST
 
-How to verify the strategy in TradingView and locally. Current baseline: **v4.3.0**.
+How to verify the strategy in TradingView and locally. Current baseline: **v4.2.0**.
 
 ---
 
@@ -57,7 +57,7 @@ node scripts/check-pine-structure.mjs TradingView/CanvasV_V4_FAST_lite.pine
 node scripts/check-pine-parity.mjs           # full-vs-lite signal parity
 ```
 
-Expected production baselines (full window, v4.3.0 defaults): **BTC 48t / +8.06R · ETH 46t / +7.33R · SOL 38t / +6.58R**. Small differences after data refresh are normal; large ones mean a logic or data change — investigate before trusting results.
+Expected production baselines (full window, CUR defaults): **BTC 36t / +6.43R · ETH 39t / +4.75R · SOL 29t / +3.96R**. Small differences after data refresh are normal; large ones mean a logic or data change — investigate before trusting results.
 
 Other harnesses:
 
