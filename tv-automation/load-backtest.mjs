@@ -10,7 +10,7 @@ const log = (m) => {
 };
 fs.writeFileSync(LOG, "");
 
-const pinePath = process.argv[2] || "../TradingView/CanvasV_V4_BACKTEST.pine";
+const pinePath = process.argv[2] || "../TradingView/CanvasV_V4_FAST.pine";
 const pineCode = fs.readFileSync(pinePath, "utf8");
 log(`loading ${pinePath} (${pineCode.length} chars)`);
 

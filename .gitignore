@@ -6,11 +6,15 @@ backtest/engine/output/*.txt
 
 # Chrome profiles (TV automation)
 tv-automation/.chrome-profile*/
-tv-automation/.chrome-profile*/
+
+# TV automation run artifacts (logs, screenshots)
+tv-automation/*.log
+tv-automation/shots/
 
 # Node modules
 tv-automation/node_modules/
 backtest/node_modules/
+node_modules/
 
 # OS files
 .DS_Store
@@ -21,5 +25,6 @@ Thumbs.db
 *.swo
 *~
 
-# Logs
-logs/
+# Collected TradingView log lines (local data, not source)
+logs/cvlog.txt
+logs/v4log.txt
