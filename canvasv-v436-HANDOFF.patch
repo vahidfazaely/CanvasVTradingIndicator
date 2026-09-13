@@ -1,0 +1,2072 @@
+diff --git a/.gitignore b/.gitignore
+index d041592..3cf33e6 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -28,3 +28,6 @@ Thumbs.db
+ # Collected TradingView log lines (local data, not source)
+ logs/cvlog.txt
+ logs/v4log.txt
++
++# Tooling run logs (local state, not source)
++.freebuff/*.log
+diff --git a/README.md b/README.md
+index 2e1e4eb..02c693f 100644
+--- a/README.md
++++ b/README.md
+@@ -25,7 +25,7 @@ Single timeframe only: everything runs on the chart series. No `request.security
+ 
+ ---
+ 
+-## TradingView version (v4.2.0)
++## TradingView version (v4.3.4)
+ 
+ - **Pipeline:** `REGIME → DIRECTION → SETUP → TRIGGER → RISK → STRATEGY`. A candidate must pass every stage; entries fire only on **confirmed closed candles** (`barstate.isconfirmed`).
+ - **Regime:** EMA 50 slope over 10 bars, normalized to ATR/bar; trending when |slope| ≥ 0.05. Trend direction needs the EMA 21/50 stack *and* a rising/falling EMA 50. High-volatility flag when ATR ≥ 130% of its 100-bar average.
+@@ -36,19 +36,19 @@ Single timeframe only: everything runs on the chart series. No `request.security
+ - **Entry quality:** |close − EMA 21| ≤ 1.5 ATR (strict, on by default); optional minimum candle-body %.
+ - **Volume (Phase 4):** relative volume vs 20-bar average — ≥ 1.20 for breakouts, ≥ 1.10 for pullbacks.
+ - **High volatility (Phase 5):** `Stronger Confirmation` by default — entries during high-vol regimes need relVol ≥ 1.40 and close location ≥ 0.75 / ≤ 0.25. Alternatives: `Allow`, `Block`, `Reduce Risk`.
+-- **Risk model:** Entry = signal close. Structural SL = 10-bar swing (signal bar excluded via `[1]`) ∓ 0.5 ATR, then a further `atrStopMult` (1.5) × ATR buffer. Too-tight structure (< 0.5 ATR) falls back to a 1.5 ATR stop; risk > 4.0 ATR **rejects the setup**. TP1 = 1.0R, TP2 = 2.5R.
+-- **Position sizing (Phase 2):** fixed-risk 0.5% of equity per trade (on by default), optional max-size cap.
+-- **Execution (Phase 3):** optional 50/50 partial TP at TP1/TP2, break-even after TP1 fill, mid-trade break-even (+0.25R after 10 bars) — all off by default. **Always on:** stale-trade exit (flat ±0.25R after 15 bars → market) and time expiry (20 bars).
++- **Risk model:** Entry = signal close. Structural SL = 10-bar swing (signal bar excluded via `[1]`) ∓ 0.5 ATR, then a further `atrStopMult` (1.25) × ATR buffer. Too-tight structure (< 0.5 ATR) falls back to a 1.5 ATR stop; risk > 4.0 ATR **rejects the setup**. TP1 = 1.0R, TP2 = 2.5R.
++- **Position sizing (Phase 2):** fixed-risk 1.0% of equity per trade (on by default), optional max-size cap.
++- **Execution (Phase 3):** full exit at TP1 by default (since v4.3.0 — runners give the profit back); optional 50/50 partial TP at TP1/TP2, break-even after TP1 fill, mid-trade break-even (+0.25R after 10 bars) — all off by default. **Always on:** stale-trade exit (flat ±0.25R after 15 bars → market) and time expiry (20 bars).
+ - **Costs modeled:** $10k capital, 0.04% commission, 1-tick slippage.
+-- **Visual modes:** `NORMAL` = clean chart (regime-colored trend line, ▲/▼ markers, 11-row panel); `DEBUG` = full EMA set, 15-row research panel, decisions log, per-signal record labels. Signal logic is identical in both.
+-- **Diagnostics:** outcome tracking (`TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`), MFE/MAE in R, a 10-bar post-SL observation window, and optional `V4LOG` / `V4OUT` / `V4POST` machine-readable alerts (all off by default). Session filter available, off by default.
+-- **Lite build:** `CanvasV_V4_FAST_lite.pine` is signal-identical (95 identifiers + 50 inputs verified equal; zero divergences on the 90/90 hold-out) with diagnostics-only trims for faster compile. Use it when the full script hits TradingView compile limits.
++- **Visual modes:** `NORMAL` = clean chart (trend-colored bars, regime-colored trend line, ▲/▼ markers, Entry/SL/TP lines, TP/SL zone boxes, signal info labels (compact mode hides the price tags), 14-row panel with SYMBOL, PERF, live MFE/MAE and EQUITY rows); `DEBUG` = full EMA set, 18-row research panel, decisions log, per-signal record labels; `cleanChart` one-switch mode hides panel/markers/labels for screenshots. Signal logic is identical in both.
++- **Diagnostics:** outcome tracking (`TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`), MFE/MAE in R, a 10-bar post-SL observation window, and optional `V4LOG` / `V4OUT` / `V4POST` machine-readable alerts (all off by default). A `CanvasV V4 EXIT` alertcondition fires on any close; an optional TP1-80% approach alert warns before the target. Session filter available, off by default (in-session chart shading when on). Alert dialogs include ticker/interval/price placeholders.
++- **Lite build:** `CanvasV_V4_FAST_lite.pine` (v4.3.4-lite) is signal-identical (95 identifiers + 50 inputs verified equal; zero divergences on the 90/90 hold-out) with diagnostics-only trims for faster compile. Use it when the full script hits TradingView compile limits.
+ 
+ ---
+ 
+ ## Local backtest engine
+ 
+-`backtest/engine.mjs` is a dependency-free Node.js mirror of the Pine v4.2.0 signal logic — every default parameter matches the Pine input defaults exactly. It adds `AMBIGUOUS` (SL+TP hit on the same bar) and `STALE_EXIT` outcomes, which the Pine strategy can only classify by exit price. It does **not** model the default-off Pine extras (partial TP, break-even-after-TP1, session filter, commission/slippage).
++`backtest/engine.mjs` is a dependency-free Node.js mirror of the Pine v4.3.x signal logic — every default parameter matches the Pine input defaults exactly. It adds `AMBIGUOUS` (SL+TP hit on the same bar) and `STALE_EXIT` outcomes, which the Pine strategy can only classify by exit price. It does **not** model the default-off Pine extras (partial TP, break-even-after-TP1, session filter, commission/slippage) or the `minChartTF` gate (the engine only runs 15m data, where the gate always passes).
+ 
+ ```bash
+ cd backtest
+@@ -64,7 +64,7 @@ Windows shortcuts: `CanvasV-Test.cmd` (quick-test menu), `CanvasV-Web.cmd` (dash
+ 
+ Research scripts (ablation, forensics, hold-outs, sweep) live in [`backtest/`](backtest/) with their reports in [`backtest/engine/output/`](backtest/engine/output/). Data: 15m Binance OHLCV, ~180 days per symbol, in [`backtest/engine/data/`](backtest/engine/data/).
+ 
+-**Current production baselines** (CUR defaults, full window): BTC 36 trades / +6.43R · ETH 39 trades / +4.75R · SOL 29 trades / +3.96R. See `V4-LITE-HOLDOUT90.md` and `V4-SIGNAL-QUALITY-LATENCY-AUDIT.md`.
++**Current production baselines** (v4.3.4 defaults — entries/exits unchanged since v4.3.0 — full window): BTC 48 trades / +8.06R · ETH 46 trades / +7.33R · SOL 38 trades / +6.58R. See `V4-LITE-HOLDOUT90.md` and `V4-SIGNAL-QUALITY-LATENCY-AUDIT.md` (v4.2.x-era reports; re-run to refresh).
+ 
+ ---
+ 
+@@ -96,13 +96,13 @@ See [`docs/Testing.md`](docs/Testing.md) for verification.
+ 
+ ## Documentation
+ 
+-- [`docs/Strategy.md`](docs/Strategy.md) — precise signal logic and defaults (current baseline: v4.2.0).
++- [`docs/Strategy.md`](docs/Strategy.md) — precise signal logic and defaults (current baseline: v4.3.0).
+ - [`docs/Changelog.md`](docs/Changelog.md) — version history (V3 MTF indicator → V4 FAST strategy).
+ - [`docs/Testing.md`](docs/Testing.md) — how to test in TradingView and locally.
+ 
+ ## Development status
+ 
+-- **TradingView:** `v4.2.0` — single-TF `strategy()` conversion with the full research stack (fixed-risk sizing, breakout quality, volume filter, high-volatility modes, partial-TP / break-even / stale / expiry exits, NORMAL/DEBUG visuals, outcome + post-SL diagnostics). Working and compiling in the Pine Editor.
+-- **Local engine:** mirrors Pine v4.2.0 signal logic exactly; used for all backtest reports.
++- **TradingView:** `v4.3.0` — single-TF `strategy()` conversion with the full research stack (fixed-risk sizing, breakout quality, volume filter, high-volatility modes, full-at-TP1 / partial-TP / break-even / stale / expiry exits, NORMAL/DEBUG visuals, outcome + post-SL diagnostics). v4.3.0 makes full exit at TP1 the default and credits exact limit fills (see changelog). Working and compiling in the Pine Editor.
++- **Local engine:** mirrors Pine v4.3.0 signal logic exactly; used for all backtest reports.
+ - **V3 note:** the legacy V3 MTF indicator (`MyBuySellIndicator.pine`) is described in the changelog but is **not present** in this repository checkout — only the V4 line ships here.
+-- **Open research question:** SOL second-half decay in the 90/90 hold-out (first-90 +4.03R → second-90 −0.06R); see `V4-R1-SOL-SECONDHALF.md` and `r1-sol-forensics.mjs`.
++- **Open research:** all 6 halves are positive in v4.3.0 (BTC +6.49 → +1.57R, ETH +3.25 → +4.09R, SOL +6.10 → +0.49R). Remaining signal-side question: SOL longs −1.38R with no causal entry filter found yet; see `V4-R1-SOL-SECONDHALF.md` and `r1-sol-forensics.mjs`.
+diff --git a/TradingView/CanvasV_V4_FAST.pine b/TradingView/CanvasV_V4_FAST.pine
+index 0961359..4e62875 100644
+--- a/TradingView/CanvasV_V4_FAST.pine
++++ b/TradingView/CanvasV_V4_FAST.pine
+@@ -10,11 +10,11 @@
+ //|  Position management uses strategy.entry / strategy.exit.         |
+ //|  No request.security, no repaint risk beyond bar-level exec.     |
+ //|                                                                  |
+-//|  v4.2.0 — strategy() conversion + Phase 3 enhancements          |
++//|  v4.3.4 — clean mode + TP warn + pos size                          |
+ //+------------------------------------------------------------------+
+-strategy("CanvasV V4.2 FAST Strategy", shorttitle = "CanvasV V4.2", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 50, calc_on_every_tick = false, process_orders_on_close = false)
++strategy("CanvasV V4.3 FAST Strategy", shorttitle = "CanvasV V4.3", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 50, calc_on_every_tick = false, process_orders_on_close = false)
+ 
+-VERSION = "v4.2.0"
++VERSION = "v4.3.6"
+ 
+ //--------------------------------------------------------------
+ // Inputs
+@@ -64,7 +64,7 @@ maxRiskAtr      = input.float(4.0, "Maximum risk (ATR)", minval = 0.01, group =
+ tp1R            = input.float(1.0, "TP1 R multiple", minval = 0.01, group = grpRisk)
+ tp2R            = input.float(2.5, "TP2 R multiple", minval = 0.01, group = grpRisk)
+ atrFallbackMult = 1.5     // fixed ATR fallback for too-tight/invalid structure
+-atrStopMult     = input.float(1.5, "ATR Stop Loss Buffer", minval = 0.0, step = 0.1, group = grpRisk, tooltip = "ATR buffer multiplier added to structural SL to handle noise. Total SL = structural + atrVal × this.")
++atrStopMult     = input.float(1.25, "ATR Stop Loss Buffer", minval = 0.0, step = 0.1, group = grpRisk, tooltip = "ATR buffer multiplier added to structural SL to handle noise. Total SL = structural + atrVal × this.")
+ 
+ //--- Execution (Phase 3)
+ enablePartialTP = input.bool(false, "Enable Partial Take-Profit (50/50 split)", group = grpExec, tooltip = "Exit 50% at TP1, let remaining 50% run to TP2.")
+@@ -77,6 +77,7 @@ outcomeBars     = input.int(20, "Position expiry (bars)", minval = 2, group = gr
+ //--- Session filter (Phase 3)
+ useSessionFilter = input.bool(false, "Enable Session Filter", group = grpExec, tooltip = "Only allow new entries during the defined session window.")
+ sessionInput     = input.session("0800-1700:23456", "Trading Session", group = grpExec, tooltip = "Pine session string, e.g. 0800-1700:23456 = Mon-Fri 8am-5pm.")
++minChartTF       = input.timeframe("15", "Minimum chart TF for signals", group = grpExec, tooltip = "Signals print only when the chart timeframe is this or higher. Default 15 blocks 1m/5m charts; set to 1S to allow all timeframes.")
+ 
+ //--- Visuals
+ showPanel   = input.bool(true, "Show panel", group = grpVis)
+@@ -84,10 +85,14 @@ showMarkers = input.bool(true, "Show BUY/SELL markers", group = grpVis)
+ showLevels  = input.bool(true, "Show Entry/SL/TP lines", group = grpVis)
+ showLog     = input.bool(true, "Show decisions log (DEBUG)", group = grpVis)
+ showEMAs    = input.bool(true, "Show EMAs (DEBUG)", group = grpVis)
++showSigLabels = input.bool(true, "Show signal info labels", group = grpVis)
++colorBars   = input.bool(true, "Color bars by trend", group = grpVis)
++cleanChart  = input.bool(false, "Clean chart mode (hide panel/markers/labels)", group = grpVis)
++compactSignals = input.bool(true, "Compact signals (hide price tags)", group = grpVis, tooltip = "Hide the ENTRY/SL/TP1/TP2 price tags; keep the BUY/SELL marker, level lines and boxes. Shows ~5x more signal history within the TradingView label limit.")
+ 
+ //--- Position Sizing (Phase 2)
+ enableFixedRisk = input.bool(true, "Enable fixed-risk position sizing", group = grpPos, tooltip = "When true, position size is calculated from risk per trade and SL distance. When false, uses default_qty_value.")
+-riskPerTrade    = input.float(0.5, "Risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.1, group = grpPos, tooltip = "Percentage of equity risked per trade. Position size = risk_amount / stop_distance.")
++riskPerTrade    = input.float(1.0, "Risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.1, group = grpPos, tooltip = "Percentage of equity risked per trade. Position size = risk_amount / stop_distance.")
+ maxPosSize      = input.float(0.0, "Max position size (0 = no limit)", minval = 0, step = 0.1, group = grpPos, tooltip = "Maximum position size in base currency units. 0 = unlimited.")
+ 
+ //--- Breakout Quality (Phase 3)
+@@ -113,6 +118,7 @@ hvCloseLocShort  = input.float(0.25, "HV: Close location max — Short", minval
+ 
+ //--- Alerts
+ enableAlerts     = input.bool(false, "Enable entry alerts", group = grpAlerts)
++enableTPWarn     = input.bool(false, "Enable TP1 approach alert (80%)", group = grpAlerts)
+ enableDiagAlerts = input.bool(false, "Enable diagnostic V4LOG/V4OUT alerts", group = grpAlerts)
+ 
+ //--- Mode
+@@ -259,6 +265,9 @@ cfgOk = emaTrigLen < emaDirLen and emaDirLen < emaSlowLen and swingLookback >= 2
+ // Session filter (Phase 3)
+ //--------------------------------------------------------------
+ inSession = not useSessionFilter or not na(time(timeframe.period, sessionInput))
++// Minimum chart-TF gate: no new signals below minChartTF (na = exotic chart type → allow, status quo).
++tfChartSec = timeframe.in_seconds(timeframe.period)
++tfOK = na(tfChartSec) or tfChartSec >= timeframe.in_seconds(minChartTF)
+ 
+ //--------------------------------------------------------------
+ // Strategy state variables (for visual display & exit management)
+@@ -276,6 +285,9 @@ var int    stratAge     = 0
+ var float  stratMFE     = 0.0
+ var float  stratMAE     = 0.0
+ var bool   stratTp1Filled = false
++var bool   skipNextClose = false
++var string supPendTxt    = ""
++
+ 
+ //--- Last signal for the panel
+ var int    lastSigBar  = na
+@@ -301,6 +313,10 @@ var label lblEntry = na
+ var label lblSL    = na
+ var label lblTP1   = na
+ var label lblTP2   = na
++var box   bxRisk   = na
++var box   bxProfit = na
++var label lblSig   = na
++
+ 
+ //--- DEBUG labels
+ var label  dbgSigLabel    = na
+@@ -336,6 +352,10 @@ var int    stOutExp = 0
+ var int    stOutSup = 0
+ var int    stWin    = 0
+ var int    stLoss   = 0
++var float  stNetR   = 0.0
++var float  stGrossW = 0.0
++var float  stGrossL = 0.0
++
+ var array<string> logArr = array.new_string()
+ var int    lastLogN = -1
+ 
+@@ -367,14 +387,14 @@ canEnterLong  = true
+ canEnterShort = true
+ 
+ //--- Rejection reason tracking
+-candReasonUp = hvBlock ? "HV BLOCKED" : not extOkUp ? "REJECT: EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+-candReasonDn = hvBlock ? "HV BLOCKED" : not extOkDn ? "REJECT: EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
++candReasonUp = not tfOK ? "LOW TIMEFRAME" : hvBlock ? "HV BLOCKED" : not extOkUp ? "REJECT: EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
++candReasonDn = not tfOK ? "LOW TIMEFRAME" : hvBlock ? "HV BLOCKED" : not extOkDn ? "REJECT: EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+ 
+ //--- Entry: the pullback-momentum gate (pbMomOk) was removed as dead code —
+ //    pullbackUp/Dn already require close > emaTrig (reclaimUp) / close < emaTrig
+ //    (reclaimDn), so it was mathematically always true.
+-entryUp = candUp and not hvBlock and extOkUp and bodyOkUp and hvVolOkUp and hvCloseOkUp and riskGateBuyOk and inSession
+-entryDn = candDn and not hvBlock and extOkDn and bodyOkDn and hvVolOkDn and hvCloseOkDn and riskGateSellOk and inSession
++entryUp = candUp and not hvBlock and extOkUp and bodyOkUp and hvVolOkUp and hvCloseOkUp and riskGateBuyOk and inSession and tfOK
++entryDn = candDn and not hvBlock and extOkDn and bodyOkDn and hvVolOkDn and hvCloseOkDn and riskGateSellOk and inSession and tfOK
+ 
+ trigUpTxt = pullbackUpV ? "PULLBACK RESUME" : "BREAKOUT"
+ trigDnTxt = pullbackDnV ? "PULLBACK RESUME" : "BREAKOUT"
+@@ -406,10 +426,26 @@ shortPosSize  := enableFixedRisk and not na(shortPosSize) and shortPosSize > 0 ?
+ //--------------------------------------------------------------
+ if goLong
+     strategy.entry("Long", strategy.long, qty = enableFixedRisk ? longPosSize : na)
+-    //--- superseded short detection
+-    if stratDir == -1
++    //--- superseded short detection (true reversal only: an actual open short;
++    //    stratDir alone would also match a market-closed trade awaiting detection)
++    if strategy.position_size < 0
++        supRL = (lastEntry - entry) / math.max(stratRisk, 1e-10)
++        supTxtL = "SUPERSEDED " + (supRL >= 0 ? "+" : "") + str.tostring(supRL, "#.##") + "R"
+         stOutSup := stOutSup + 1
+-        lastOutcome := "SUPERSEDED"
++        skipNextClose := true
++        supPendTxt := supTxtL
++        if supRL > 0
++            stWin := stWin + 1
++            stGrossW := stGrossW + supRL
++        else
++            stLoss := stLoss + 1
++            stGrossL := stGrossL - supRL
++        stNetR := stNetR + supRL
++        if array.size(logArr) >= 12
++            array.remove(logArr, 0)
++        array.push(logArr, "  EXIT " + supTxtL + " (" + str.tostring(stratAge) + "b) MFE +" + str.tostring(stratMFE, "#.##") + " MAE -" + str.tostring(stratMAE, "#.##") + " · " + f_timeTxt(time))
++        if enableDiagAlerts
++            alert("V4OUT|" + syminfo.ticker + "|" + timeframe.period + "|SHORT|" + supTxtL + "|" + str.tostring(stratAge) + "b|MFE=+" + str.tostring(stratMFE, "#.##") + "R|MAE=-" + str.tostring(stratMAE, "#.##") + "R|T=" + f_timeTxt(time), alert.freq_once_per_bar_close)
+     stratDir     := 1
+     stratDirTxt  := "BUY"
+     stratTrigTxt := trigUpTxt
+@@ -460,15 +496,26 @@ if goLong
+         label.delete(lblTP1)
+     if not na(lblTP2)
+         label.delete(lblTP2)
++    if not na(bxRisk)
++        box.delete(bxRisk)
++    if not na(bxProfit)
++        box.delete(bxProfit)
++    if not na(lblSig)
++        label.delete(lblSig)
+     if showLevels
+         lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+         lnSL    := line.new(bar_index, slBuy,  bar_index, slBuy,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+         lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+         lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+-        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
+-        lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+-        lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
+-        lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
++        bxRisk   := box.new(left = bar_index, top = entry, right = bar_index, bottom = slBuy, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
++        bxProfit := box.new(left = bar_index, top = tp1Buy, right = bar_index, bottom = entry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
++        if not compactSignals
++            lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
++            lblSL    := label.new(bar_index, slBuy,  "SL "    + str.tostring(slBuy,  format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
++            lblTP1   := label.new(bar_index, tp1Buy, "TP1 "   + str.tostring(tp1Buy, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
++            lblTP2   := label.new(bar_index, tp2Buy, "TP2 "   + str.tostring(tp2Buy, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.small)
++    if showSigLabels and not cleanChart
++        lblSig := label.new(bar_index, low - atrVal * 1.0, "BUY · " + trigUpTxt + "\nSL " + f_atxt(riskAtrBuy) + "A · TP +" + f_atxt(tp1R) + "R", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, size = size.small)
+     if enableAlerts
+         alert(syminfo.ticker + " " + timeframe.period + ": BUY | " + trigUpTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slBuy, format.mintick) + " TP1 " + str.tostring(tp1Buy, format.mintick) + " TP2 " + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
+     if enableDiagAlerts
+@@ -479,10 +526,26 @@ if goLong
+ //--------------------------------------------------------------
+ if goShort
+     strategy.entry("Short", strategy.short, qty = enableFixedRisk ? shortPosSize : na)
+-    //--- superseded long detection
+-    if stratDir == 1
++    //--- superseded long detection (true reversal only: an actual open long;
++    //    stratDir alone would also match a market-closed trade awaiting detection)
++    if strategy.position_size > 0
++        supRS = (entry - lastEntry) / math.max(stratRisk, 1e-10)
++        supTxtS = "SUPERSEDED " + (supRS >= 0 ? "+" : "") + str.tostring(supRS, "#.##") + "R"
+         stOutSup := stOutSup + 1
+-        lastOutcome := "SUPERSEDED"
++        skipNextClose := true
++        supPendTxt := supTxtS
++        if supRS > 0
++            stWin := stWin + 1
++            stGrossW := stGrossW + supRS
++        else
++            stLoss := stLoss + 1
++            stGrossL := stGrossL - supRS
++        stNetR := stNetR + supRS
++        if array.size(logArr) >= 12
++            array.remove(logArr, 0)
++        array.push(logArr, "  EXIT " + supTxtS + " (" + str.tostring(stratAge) + "b) MFE +" + str.tostring(stratMFE, "#.##") + " MAE -" + str.tostring(stratMAE, "#.##") + " · " + f_timeTxt(time))
++        if enableDiagAlerts
++            alert("V4OUT|" + syminfo.ticker + "|" + timeframe.period + "|LONG|" + supTxtS + "|" + str.tostring(stratAge) + "b|MFE=+" + str.tostring(stratMFE, "#.##") + "R|MAE=-" + str.tostring(stratMAE, "#.##") + "R|T=" + f_timeTxt(time), alert.freq_once_per_bar_close)
+     stratDir     := -1
+     stratDirTxt  := "SELL"
+     stratTrigTxt := trigDnTxt
+@@ -533,15 +596,26 @@ if goShort
+         label.delete(lblTP1)
+     if not na(lblTP2)
+         label.delete(lblTP2)
++    if not na(bxRisk)
++        box.delete(bxRisk)
++    if not na(bxProfit)
++        box.delete(bxProfit)
++    if not na(lblSig)
++        label.delete(lblSig)
+     if showLevels
+         lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+         lnSL    := line.new(bar_index, slSell, bar_index, slSell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+         lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
+         lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
+-        lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
+-        lblSL    := label.new(bar_index, slSell, "SL "    + str.tostring(slSell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+-        lblTP1   := label.new(bar_index, tp1Sell, "TP1 " + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.small)
+-        lblTP2   := label.new(bar_index, tp2Sell, "TP2 " + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.small)
++        bxRisk   := box.new(left = bar_index, top = slSell, right = bar_index, bottom = entry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
++        bxProfit := box.new(left = bar_index, top = entry, right = bar_index, bottom = tp1Sell, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
++        if not compactSignals
++            lblEntry := label.new(bar_index, entry,  "ENTRY " + str.tostring(entry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
++            lblSL    := label.new(bar_index, slSell, "SL "    + str.tostring(slSell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
++            lblTP1   := label.new(bar_index, tp1Sell, "TP1 " + str.tostring(tp1Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.small)
++            lblTP2   := label.new(bar_index, tp2Sell, "TP2 " + str.tostring(tp2Sell, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.small)
++    if showSigLabels and not cleanChart
++        lblSig := label.new(bar_index, high + atrVal * 1.0, "SELL · " + trigDnTxt + "\nSL " + f_atxt(riskAtrSell) + "A · TP +" + f_atxt(tp1R) + "R", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
+     if enableAlerts
+         alert(syminfo.ticker + " " + timeframe.period + ": SELL | " + trigDnTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slSell, format.mintick) + " TP1 " + str.tostring(tp1Sell, format.mintick) + " TP2 " + str.tostring(tp2Sell, format.mintick), alert.freq_once_per_bar_close)
+     if enableDiagAlerts
+@@ -549,6 +623,7 @@ if goShort
+ 
+ //--------------------------------------------------------------
+ // Strategy exit management (runs every bar while in position)
++//  - Single TP (default, v4.3.0): 100% at TP1 — runners give the profit back
+ //  - Partial TP: 50% at TP1, 50% at TP2
+ //  - Break-even: after TP1 fill, move SL to entry for remaining
+ //  - Expiry: close after outcomeBars if neither TP nor SL hit
+@@ -574,7 +649,7 @@ if strategy.position_size > 0
+         strategy.exit("L-TP1", "Long", limit = stratTP1, stop = exitSL, qty_percent = 50)
+         strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 100)
+     else
+-        strategy.exit("L-TP2", "Long", limit = stratTP2, stop = exitSL, qty_percent = 100)
++        strategy.exit("L-TP1", "Long", limit = stratTP1, stop = exitSL, qty_percent = 100)
+     //--- Age tracking
+     stratAge := bar_index - stratEntryBar
+     //--- MFE/MAE tracking
+@@ -606,7 +681,7 @@ if strategy.position_size < 0
+         strategy.exit("S-TP1", "Short", limit = stratTP1, stop = exitSL, qty_percent = 50)
+         strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 100)
+     else
+-        strategy.exit("S-TP2", "Short", limit = stratTP2, stop = exitSL, qty_percent = 100)
++        strategy.exit("S-TP1", "Short", limit = stratTP1, stop = exitSL, qty_percent = 100)
+     //--- Age tracking
+     stratAge := bar_index - stratEntryBar
+     //--- MFE/MAE tracking
+@@ -626,7 +701,18 @@ if strategy.position_size < 0
+ //--------------------------------------------------------------
+ // Detect trade closures for outcome tracking + diagnostics
+ //--------------------------------------------------------------
+-if strategy.closedtrades > strategy.closedtrades[1]
++//--- Exit-bar flag (shared by the supersede skip, the detector, and the EXIT alert)
++isExitBar  = strategy.closedtrades > strategy.closedtrades[1]
++supSkipBar = isExitBar and skipNextClose
++
++//--- Superseded trades were already recorded at reversal time —
++//    skip their later close registration (one-shot)
++if supSkipBar
++    skipNextClose := false
++    lastOutcome := supPendTxt
++    supPendTxt := ""
++
++if isExitBar and not supSkipBar
+     ctIdx     = strategy.closedtrades - 1
+     ctEntryP  = strategy.closedtrades.entry_price(ctIdx)
+     ctExitP   = strategy.closedtrades.exit_price(ctIdx)
+@@ -650,20 +736,22 @@ if strategy.closedtrades > strategy.closedtrades[1]
+         else if ctExitP <= stratSL
+             posOut := "SL FIRST"
+             stOutSl := stOutSl + 1
+-            //--- Start post-SL observation
+-            postActive     := true
+-            postDir        := 1
+-            postEntry      := ctEntryP
+-            postRisk       := stratRisk
+-            postBars       := 0
+-            postMax        := 0.0
+-            postExitBar    := bar_index
+-            postExitLow    := low
+-            postExitHigh   := high
+-            postWasOutcome := "SL FIRST"
+-            postWasAge     := stratAge
+-            postWasMFE     := stratMFE
+-            postWasMAE     := stratMAE
++            //--- Start post-SL observation (skip if one is already running —
++            //    an overlapping window would corrupt the in-flight observation)
++            if not postActive
++                postActive     := true
++                postDir        := 1
++                postEntry      := ctEntryP
++                postRisk       := stratRisk
++                postBars       := 0
++                postMax        := 0.0
++                postExitBar    := bar_index
++                postExitLow    := low
++                postExitHigh   := high
++                postWasOutcome := "SL FIRST"
++                postWasAge     := stratAge
++                postWasMFE     := stratMFE
++                postWasMAE     := stratMAE
+         else
+             posOut := "EXPIRED"
+             stOutExp := stOutExp + 1
+@@ -677,19 +765,22 @@ if strategy.closedtrades > strategy.closedtrades[1]
+         else if ctExitP >= stratSL
+             posOut := "SL FIRST"
+             stOutSl := stOutSl + 1
+-            postActive     := true
+-            postDir        := -1
+-            postEntry      := ctEntryP
+-            postRisk       := stratRisk
+-            postBars       := 0
+-            postMax        := 0.0
+-            postExitBar    := bar_index
+-            postExitLow    := low
+-            postExitHigh   := high
+-            postWasOutcome := "SL FIRST"
+-            postWasAge     := stratAge
+-            postWasMFE     := stratMFE
+-            postWasMAE     := stratMAE
++            //--- Start post-SL observation (skip if one is already running —
++            //    an overlapping window would corrupt the in-flight observation)
++            if not postActive
++                postActive     := true
++                postDir        := -1
++                postEntry      := ctEntryP
++                postRisk       := stratRisk
++                postBars       := 0
++                postMax        := 0.0
++                postExitBar    := bar_index
++                postExitLow    := low
++                postExitHigh   := high
++                postWasOutcome := "SL FIRST"
++                postWasAge     := stratAge
++                postWasMFE     := stratMFE
++                postWasMAE     := stratMAE
+         else
+             posOut := "EXPIRED"
+             stOutExp := stOutExp + 1
+@@ -698,6 +789,11 @@ if strategy.closedtrades > strategy.closedtrades[1]
+         stWin := stWin + 1
+     else
+         stLoss := stLoss + 1
++    stNetR := stNetR + ctR
++    if ctR > 0
++        stGrossW := stGrossW + ctR
++    else
++        stGrossL := stGrossL - ctR
+     lastOutcome := posOut + " " + (ctR >= 0 ? "+" : "") + str.tostring(ctR, "#.##") + "R"
+     //--- DEBUG annotation
+     if visualMode == "DEBUG" and not na(dbgSigLabel)
+@@ -765,17 +861,21 @@ markerGapAtr = 0.5
+ //--- Trend line (colored by regime)
+ trendCol = trendUp ? color.new(color.green, 0) : trendDn ? color.new(color.red, 0) : color.new(color.gray, 60)
+ plot(emaDir, "Trend", color = visualMode == "NORMAL" ? trendCol : color.new(color.white, 100), linewidth = 2)
++//--- LuxAlgo-style trend bars (display only)
++barcolor(not colorBars ? na : trendUp ? color.green : trendDn ? color.red : na)
++bgcolor(useSessionFilter and inSession ? color.new(color.blue, 95) : na, title = "Session")
+ //--- DEBUG: raw EMA set
+ plot(emaTrig, "Trigger EMA",  color = visualMode == "DEBUG" and showEMAs ? color.new(color.blue, 0) : color.new(color.white, 100), linewidth = 1)
+ plot(emaDir, "Direction EMA", color = visualMode == "DEBUG" and showEMAs ? color.new(color.orange, 0) : color.new(color.white, 100), linewidth = 1)
+ plot(emaSlow, "Slow EMA",     color = visualMode == "DEBUG" and showEMAs ? color.new(color.silver, 0) : color.new(color.white, 100), linewidth = 2)
+ 
+ //--- BUY / SELL markers
+-plotshape(showMarkers and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
+-plotshape(showMarkers and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
++plotshape(showMarkers and not cleanChart and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
++plotshape(showMarkers and not cleanChart and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
+ 
+-alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY signal")
+-alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL signal")
++alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
++alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
++alertcondition(isExitBar, title = "CanvasV V4 EXIT", message = "CanvasV V4 EXIT {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
+ 
+ //--------------------------------------------------------------
+ // Position state display (from strategy functions)
+@@ -787,26 +887,50 @@ isLong      = posSize > 0
+ isShort     = posSize < 0
+ 
+ posCurR = isLong ? (close - posAvgPrice) / math.max(stratRisk, 1e-10) : isShort ? (posAvgPrice - close) / math.max(stratRisk, 1e-10) : na
+-posTxt  = isLong ? "LONG  · " + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
+-           isShort ? "SHORT · " + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
++//--- Live progress to TP1 for the open position (fraction of the tp1R target)
++posProg = isFlat or na(posCurR) ? na : posCurR / math.max(tp1R, 1e-10)
++progTxt = na(posProg) ? "" : " · " + str.tostring(posProg * 100, "#") + "%"
++//--- Live excursion of the open position (best/worst R since entry)
++excTxt = isFlat ? "--" : "MFE +" + str.tostring(stratMFE, "#.##") + "R · MAE -" + str.tostring(stratMAE, "#.##") + "R"
++//--- Bars elapsed since the last signal
++sigAgeTxt = na(lastSigBar) ? "" : " · " + str.tostring(bar_index - lastSigBar) + "b"
++//--- Position size for the POS row (lots/contracts at a glance)
++posQtyTxt = isFlat ? "" : str.tostring(math.abs(strategy.position_size), "#.####") + " · "
++//--- TP1 approach warning (80% of the way to TP1; realtime alerts only)
++tpWarn = enableTPWarn and ta.crossover(posProg, 0.8)
++alertcondition(tpWarn, title = "CanvasV V4 TP1 80%", message = "CanvasV V4 {{exchange}}:{{ticker}} {{interval}} 80% to TP1 @ {{close}}")
++posTxt  = isLong ? "LONG  · " + posQtyTxt + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
++           isShort ? "SHORT · " + posQtyTxt + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
+            lastOutcome == "" ? "FLAT" : "FLAT · last " + lastOutcome
+-posCol  = isLong ? color.green : isShort ? color.red : color.silver
++posCol  = isFlat or na(posCurR) ? color.silver : posCurR >= 0 ? color.green : color.red
+ 
+ //--------------------------------------------------------------
+ // Panel
+ //--------------------------------------------------------------
++//--- Session performance (closed trades only; R-based)
++perfN = stWin + stLoss
++perfWR = perfN > 0 ? stWin / perfN * 100 : 0.0
++perfPFTxt = perfN == 0 ? "--" : stGrossL == 0 ? "∞" : str.tostring(stGrossW / stGrossL, "#.##")
++perfTxt = perfN == 0 ? "--" : (stNetR >= 0 ? "+" : "") + str.tostring(stNetR, "#.##") + "R · " + str.tostring(perfWR, "#") + "% · PF " + perfPFTxt
++eqPct = (strategy.equity / strategy.initial_capital - 1) * 100
++eqTxt = (eqPct >= 0 ? "+" : "") + str.tostring(eqPct, "#.##") + "%"
++eqCol = eqPct >= 0 ? color.green : color.red
++
+ tfSec = timeframe.in_seconds(timeframe.period)
+ tfTxt = tfSec == 900 ? "15M" : tfSec == 60 ? "1M" : tfSec == 3600 ? "1H" : tfSec == 14400 ? "4H" : tfSec == 86400 ? "1D" : str.tostring(timeframe.period)
++tfSymTxt = syminfo.ticker + " · " + tfTxt
+ 
+ regimeTxt = trendUp ? "TRENDING ↑" : trendDn ? "TRENDING ↓" : highVol ? "HIGH VOL" : "RANGING"
+ regimeCol = trendUp ? color.green : trendDn ? color.red : color.silver
+ setupTxt  = setupUp ? "LONG" : setupDn ? "SHORT" : "NONE"
+ setupCol  = setupUp ? color.green : setupDn ? color.red : color.silver
+ sigCol    = lastSigTxt == "BUY" ? color.green : lastSigTxt == "SELL" ? color.red : color.silver
++sigShowTxt = not tfOK ? "LOW TF" : lastSigTxt + sigAgeTxt
++sigShowCol = not tfOK ? color.orange : sigCol
+ tpCol     = lastSigTxt == "BUY" ? color.green : color.red
+ 
+ //--- Reason: why we are waiting
+-waitReason = not cfgOk ? "Config error: EMA order" :
++waitReason = not tfOK ? "Below min timeframe" : not cfgOk ? "Config error: EMA order" :
+              not trending ? (highVol ? "High volatility" : "Regime ranging") :
+              not (setupUp or setupDn) ? "Setup not aligned" :
+              not (triggerUp or triggerDn) ? "No valid trigger" :
+@@ -820,21 +944,21 @@ reasonCol = not isFlat ? (lastSigTxt == "BUY" ? color.green : color.red) : color
+ var table v4panelN = na
+ var table v4panelD = na
+ 
+-if showPanel and visualMode == "NORMAL"
++if showPanel and not cleanChart and visualMode == "NORMAL"
+     if na(v4panelN)
+-        v4panelN := table.new(position.top_right, 2, 11, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
++        v4panelN := table.new(position.top_right, 2, 14, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+     trendTxtN = trendUp ? "BULLISH" : trendDn ? "BEARISH" : "RANGING"
+     trendColN = trendUp ? color.green : trendDn ? color.red : color.silver
+-    posTxtN = isLong ? "LONG · " + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" :
+-              isShort ? "SHORT · " + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" : "FLAT"
++    posTxtN = isLong ? "LONG · " + posQtyTxt + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" + progTxt :
++              isShort ? "SHORT · " + posQtyTxt + str.tostring(stratAge) + "b · " + (posCurR >= 0 ? "+" : "") + str.tostring(posCurR, "#.##") + "R" + progTxt : "FLAT"
+     table.cell(v4panelN, 0, 0, "CANVASV V4", text_color = color.white, text_size = size.normal)
+     table.cell(v4panelN, 1, 0, VERSION, text_color = color.silver, text_size = size.small)
+-    table.cell(v4panelN, 0, 1, "TIMEFRAME", text_color = color.silver, text_size = size.small)
+-    table.cell(v4panelN, 1, 1, tfTxt, text_color = color.white, text_size = size.normal)
++    table.cell(v4panelN, 0, 1, "SYMBOL", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelN, 1, 1, tfSymTxt, text_color = color.white, text_size = size.normal)
+     table.cell(v4panelN, 0, 2, "TREND", text_color = color.silver, text_size = size.small)
+     table.cell(v4panelN, 1, 2, trendTxtN, text_color = trendColN, text_size = size.normal)
+     table.cell(v4panelN, 0, 3, "SIGNAL", text_color = color.silver, text_size = size.small)
+-    table.cell(v4panelN, 1, 3, lastSigTxt, text_color = sigCol, text_size = size.large)
++    table.cell(v4panelN, 1, 3, sigShowTxt, text_color = sigShowCol, text_size = size.large)
+     table.cell(v4panelN, 0, 4, "POSITION", text_color = color.silver, text_size = size.small)
+     table.cell(v4panelN, 1, 4, posTxtN, text_color = posCol, text_size = size.normal)
+     table.cell(v4panelN, 0, 5, "TRIGGER", text_color = color.silver, text_size = size.small)
+@@ -849,18 +973,24 @@ if showPanel and visualMode == "NORMAL"
+     table.cell(v4panelN, 1, 9, na(lastTP2) ? "--" : str.tostring(lastTP2, format.mintick), text_color = tpCol, text_size = size.normal)
+     table.cell(v4panelN, 0, 10, "W/L", text_color = color.silver, text_size = size.small)
+     table.cell(v4panelN, 1, 10, str.tostring(stWin) + "W / " + str.tostring(stLoss) + "L (" + str.tostring(stBuy) + "B/" + str.tostring(stSell) + "S)", text_color = color.white, text_size = size.small)
++    table.cell(v4panelN, 0, 11, "PERF", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelN, 1, 11, perfTxt, text_color = color.white, text_size = size.small)
++    table.cell(v4panelN, 0, 12, "MFE/MAE", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelN, 1, 12, excTxt, text_color = color.white, text_size = size.small)
++    table.cell(v4panelN, 0, 13, "EQUITY", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelN, 1, 13, eqTxt, text_color = eqCol, text_size = size.normal)
+ else
+     if not na(v4panelN)
+         table.delete(v4panelN)
+         v4panelN := na
+ 
+-if showPanel and visualMode == "DEBUG"
++if showPanel and not cleanChart and visualMode == "DEBUG"
+     if na(v4panelD)
+-        v4panelD := table.new(position.top_right, 2, 15, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
++        v4panelD := table.new(position.top_right, 2, 18, border_width = 1, border_color = color.new(color.gray, 0), bgcolor = color.new(color.rgb(26, 26, 32), 0))
+     table.cell(v4panelD, 0, 0, "CANVASV FAST", text_color = color.white,  text_size = size.normal)
+     table.cell(v4panelD, 1, 0, VERSION,        text_color = color.silver, text_size = size.small)
+-    table.cell(v4panelD, 0, 1, "TIMEFRAME", text_color = color.silver, text_size = size.small)
+-    table.cell(v4panelD, 1, 1, tfTxt,        text_color = color.white,  text_size = size.normal)
++    table.cell(v4panelD, 0, 1, "SYMBOL", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelD, 1, 1, tfSymTxt, text_color = color.white,  text_size = size.normal)
+     table.cell(v4panelD, 0, 2, "REGIME", text_color = color.silver, text_size = size.small)
+     table.cell(v4panelD, 1, 2, regimeTxt, text_color = regimeCol, text_size = size.normal)
+     table.cell(v4panelD, 0, 3, "SETUP", text_color = color.silver, text_size = size.small)
+@@ -868,7 +998,7 @@ if showPanel and visualMode == "DEBUG"
+     table.cell(v4panelD, 0, 4, "TRIGGER", text_color = color.silver, text_size = size.small)
+     table.cell(v4panelD, 1, 4, lastTrigTxt, text_color = color.white, text_size = size.small)
+     table.cell(v4panelD, 0, 5, "SIGNAL", text_color = color.silver, text_size = size.small)
+-    table.cell(v4panelD, 1, 5, lastSigTxt, text_color = sigCol, text_size = size.large)
++    table.cell(v4panelD, 1, 5, sigShowTxt, text_color = sigShowCol, text_size = size.large)
+     table.cell(v4panelD, 0, 6, "REASON", text_color = color.silver, text_size = size.small)
+     table.cell(v4panelD, 1, 6, reasonTxt, text_color = reasonCol, text_size = size.small)
+     table.cell(v4panelD, 0, 7, "ENTRY", text_color = color.silver, text_size = size.small)
+@@ -887,6 +1017,12 @@ if showPanel and visualMode == "DEBUG"
+     table.cell(v4panelD, 1, 13, "SL " + str.tostring(stOutSl) + " · T1 " + str.tostring(stOutTp1) + " · T2 " + str.tostring(stOutTp2) + " · EXP " + str.tostring(stOutExp) + " · SUP " + str.tostring(stOutSup), text_color = color.silver, text_size = size.small)
+     table.cell(v4panelD, 0, 14, "WIN/LOSS", text_color = color.silver, text_size = size.small)
+     table.cell(v4panelD, 1, 14, str.tostring(stWin) + "W / " + str.tostring(stLoss) + "L  (PF " + (stLoss > 0 ? str.tostring(stWin / stLoss, "#.##") : "∞") + ")", text_color = color.white, text_size = size.small)
++    table.cell(v4panelD, 0, 15, "PERF", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelD, 1, 15, perfTxt, text_color = color.white, text_size = size.small)
++    table.cell(v4panelD, 0, 16, "MFE/MAE", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelD, 1, 16, excTxt, text_color = color.white, text_size = size.small)
++    table.cell(v4panelD, 0, 17, "EQUITY", text_color = color.silver, text_size = size.small)
++    table.cell(v4panelD, 1, 17, eqTxt, text_color = eqCol, text_size = size.normal)
+ else
+     if not na(v4panelD)
+         table.delete(v4panelD)
+@@ -950,13 +1086,27 @@ else if showLevels != prevShowLevels
+         if not na(lblTP2)
+             label.delete(lblTP2)
+             lblTP2 := na
++        if not na(bxRisk)
++            box.delete(bxRisk)
++            bxRisk := na
++        if not na(bxProfit)
++            box.delete(bxProfit)
++            bxProfit := na
+     else
+         if not na(lastSigBar)
+             lnEntry := line.new(lastSigBar, lastEntry,  lastSigBar, lastEntry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+             lnSL    := line.new(lastSigBar, lastSL,     lastSigBar, lastSL,     xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+             lnTP1   := line.new(lastSigBar, lastTP1,    lastSigBar, lastTP1,    xloc = xloc.bar_index, extend = extend.right, color = color.new(tpCol, 0), style = line.style_dotted, width = 1)
+             lnTP2   := line.new(lastSigBar, lastTP2,    lastSigBar, lastTP2,    xloc = xloc.bar_index, extend = extend.right, color = color.new(tpCol, 0), style = line.style_dotted, width = 1)
+-            lblEntry := label.new(lastSigBar, lastEntry, "ENTRY " + str.tostring(lastEntry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
+-            lblSL    := label.new(lastSigBar, lastSL,    "SL "    + str.tostring(lastSL, format.mintick),    xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
+-            lblTP1   := label.new(lastSigBar, lastTP1,   "TP1 "   + str.tostring(lastTP1, format.mintick),   xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = tpCol, size = size.small)
+-            lblTP2   := label.new(lastSigBar, lastTP2,   "TP2 "   + str.tostring(lastTP2, format.mintick),   xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = tpCol, size = size.small)
++            if not compactSignals
++                lblEntry := label.new(lastSigBar, lastEntry, "ENTRY " + str.tostring(lastEntry, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.small)
++                lblSL    := label.new(lastSigBar, lastSL,    "SL "    + str.tostring(lastSL, format.mintick),    xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.small)
++                lblTP1   := label.new(lastSigBar, lastTP1,   "TP1 "   + str.tostring(lastTP1, format.mintick),   xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = tpCol, size = size.small)
++                lblTP2   := label.new(lastSigBar, lastTP2,   "TP2 "   + str.tostring(lastTP2, format.mintick),   xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = tpCol, size = size.small)
++            if lastSigTxt == "BUY"
++                bxRisk   := box.new(left = lastSigBar, top = lastEntry, right = lastSigBar, bottom = lastSL, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
++                bxProfit := box.new(left = lastSigBar, top = lastTP1, right = lastSigBar, bottom = lastEntry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
++            else
++                bxRisk   := box.new(left = lastSigBar, top = lastSL, right = lastSigBar, bottom = lastEntry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
++                bxProfit := box.new(left = lastSigBar, top = lastEntry, right = lastSigBar, bottom = lastTP1, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
++w(color.green, 88))
+diff --git a/TradingView/CanvasV_V4_FAST_lite.pine b/TradingView/CanvasV_V4_FAST_lite.pine
+index c6ec5c1..6d6737d 100644
+--- a/TradingView/CanvasV_V4_FAST_lite.pine
++++ b/TradingView/CanvasV_V4_FAST_lite.pine
+@@ -1,12 +1,12 @@
+ //@version=5
+ //+------------------------------------------------------------------+
+-//|  CanvasV V4.2 FAST Strategy — Lite (fast-compile build)          |
+-//|  Signal logic matches TradingView/CanvasV_V4_FAST.pine (v4.3.0). |
++//|  CanvasV V4.3 FAST Strategy — Lite (fast-compile build)          |
++//|  Signal logic matches TradingView/CanvasV_V4_FAST.pine (v4.3.4). |
+ //|  Lighter diagnostics: no DEBUG mode / decisions log / V4LOG.     |
+ //+------------------------------------------------------------------+
+-strategy("CanvasV V4.2 FAST Lite", shorttitle = "CanvasV V4.2 LITE", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 20, calc_on_every_tick = false, process_orders_on_close = false)
++strategy("CanvasV V4.3 FAST Lite", shorttitle = "CanvasV V4.3 LITE", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 20, calc_on_every_tick = false, process_orders_on_close = false)
+ 
+-VERSION = "v4.3.0-lite"
++VERSION = "v4.3.6-lite"
+ 
+ //--------------------------------------------------------------
+ // Inputs
+@@ -67,16 +67,21 @@ outcomeBars     = input.int(20, "Position expiry (bars)", minval = 2, group = gr
+ //--- Session filter (Phase 3)
+ useSessionFilter = input.bool(false, "Enable Session Filter", group = grpExec, tooltip = "Only allow new entries during the defined session window.")
+ sessionInput     = input.session("0800-1700:23456", "Trading Session", group = grpExec, tooltip = "Pine session string, e.g. 0800-1700:23456 = Mon-Fri 8am-5pm.")
++minChartTF       = input.timeframe("15", "Minimum chart TF for signals", group = grpExec, tooltip = "Signals print only when the chart timeframe is this or higher. Default 15 blocks 1m/5m charts; set to 1S to allow all timeframes.")
+ 
+ //--- Visuals
+ showPanel   = input.bool(true, "Show panel", group = grpVis)
+ showMarkers = input.bool(true, "Show BUY/SELL markers", group = grpVis)
+ showLevels  = input.bool(true, "Show Entry/SL/TP lines", group = grpVis)
+ showEMAs    = input.bool(false, "Show EMAs", group = grpVis)
++showSigLabels = input.bool(true, "Show signal info labels", group = grpVis)
++compactSignals = input.bool(true, "Compact signals (hide price tags)", group = grpVis, tooltip = "Hide the ENTRY/SL/TP1/TP2 price tags; keep the BUY/SELL marker, level lines and boxes. Shows ~5x more signal history within the TradingView label limit.")
++colorBars   = input.bool(true, "Color bars by trend", group = grpVis)
++cleanChart  = input.bool(false, "Clean chart mode (hide panel/markers/labels)", group = grpVis)
+ 
+ //--- Position Sizing (Phase 2)
+ enableFixedRisk = input.bool(true, "Enable fixed-risk position sizing", group = grpPos, tooltip = "When true, position size is calculated from risk per trade and SL distance. When false, uses default_qty_value.")
+-riskPerTrade    = input.float(0.5, "Risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.1, group = grpPos, tooltip = "Percentage of equity risked per trade. Position size = risk_amount / stop_distance.")
++riskPerTrade    = input.float(1.0, "Risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.1, group = grpPos, tooltip = "Percentage of equity risked per trade. Position size = risk_amount / stop_distance.")
+ maxPosSize      = input.float(0.0, "Max position size (0 = no limit)", minval = 0, step = 0.1, group = grpPos, tooltip = "Maximum position size in base currency units. 0 = unlimited.")
+ 
+ //--- Breakout Quality (Phase 3)
+@@ -102,6 +107,7 @@ hvCloseLocShort  = input.float(0.25, "HV: Close location max — Short", minval
+ 
+ //--- Alerts
+ enableAlerts = input.bool(false, "Enable entry alerts", group = grpAlerts)
++enableTPWarn = input.bool(false, "Enable TP1 approach alert (80%)", group = grpAlerts)
+ 
+ //--------------------------------------------------------------
+ // Series (chart-TF only — no request.security, no lookahead)
+@@ -241,6 +247,9 @@ cfgOk = emaTrigLen < emaDirLen and emaDirLen < emaSlowLen and swingLookback >= 2
+ // Session filter (Phase 3)
+ //--------------------------------------------------------------
+ inSession = not useSessionFilter or not na(time(timeframe.period, sessionInput))
++// Minimum chart-TF gate: no new signals below minChartTF (na = exotic chart type → allow, status quo).
++tfChartSec = timeframe.in_seconds(timeframe.period)
++tfOK = na(tfChartSec) or tfChartSec >= timeframe.in_seconds(minChartTF)
+ 
+ //--------------------------------------------------------------
+ // Strategy state variables (for visual display & exit management)
+@@ -258,6 +267,9 @@ var int    stratAge     = 0
+ var float  stratMFE     = 0.0
+ var float  stratMAE     = 0.0
+ var bool   stratTp1Filled = false
++var bool   skipNextClose = false
++var string supPendTxt    = ""
++
+ 
+ //--- Last signal for the panel
+ var int    lastSigBar  = na
+@@ -282,6 +294,10 @@ var label lblEntry = na
+ var label lblSL    = na
+ var label lblTP1   = na
+ var label lblTP2   = na
++var box   bxRisk   = na
++var box   bxProfit = na
++var label lblSig   = na
++
+ 
+ //--- Counters
+ var int    stBuy   = 0
+@@ -293,6 +309,10 @@ var int    stOutExp = 0
+ var int    stOutSup = 0
+ var int    stWin    = 0
+ var int    stLoss   = 0
++var float  stNetR   = 0.0
++var float  stGrossW = 0.0
++var float  stGrossL = 0.0
++
+ 
+ //--------------------------------------------------------------
+ // Helpers
+@@ -315,11 +335,11 @@ candUp = isConfirmed and cfgOk and setupUp and triggerUp
+ candDn = isConfirmed and cfgOk and setupDn and triggerDn
+ 
+ //--- Rejection reason tracking
+-candReasonUp = hvBlock ? "HV BLOCKED" : not extOkUp ? "REJECT: EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+-candReasonDn = hvBlock ? "HV BLOCKED" : not extOkDn ? "REJECT: EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
++candReasonUp = not tfOK ? "LOW TIMEFRAME" : hvBlock ? "HV BLOCKED" : not extOkUp ? "REJECT: EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
++candReasonDn = not tfOK ? "LOW TIMEFRAME" : hvBlock ? "HV BLOCKED" : not extOkDn ? "REJECT: EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+ 
+-entryUp = candUp and not hvBlock and extOkUp and bodyOkUp and hvVolOkUp and hvCloseOkUp and riskGateBuyOk and inSession
+-entryDn = candDn and not hvBlock and extOkDn and bodyOkDn and hvVolOkDn and hvCloseOkDn and riskGateSellOk and inSession
++entryUp = candUp and not hvBlock and extOkUp and bodyOkUp and hvVolOkUp and hvCloseOkUp and riskGateBuyOk and inSession and tfOK
++entryDn = candDn and not hvBlock and extOkDn and bodyOkDn and hvVolOkDn and hvCloseOkDn and riskGateSellOk and inSession and tfOK
+ 
+ trigUpTxt = pullbackUpV ? "PULLBACK RESUME" : "BREAKOUT"
+ trigDnTxt = pullbackDnV ? "PULLBACK RESUME" : "BREAKOUT"
+@@ -348,10 +368,21 @@ shortPosSize  := enableFixedRisk and not na(shortPosSize) and shortPosSize > 0 ?
+ //--------------------------------------------------------------
+ if goLong
+     strategy.entry("Long", strategy.long, qty = enableFixedRisk ? longPosSize : na)
+-    //--- superseded short detection
+-    if stratDir == -1
++    //--- superseded short detection (true reversal only: an actual open short;
++    //    stratDir alone would also match a market-closed trade awaiting detection)
++    if strategy.position_size < 0
++        supRL = (lastEntry - entry) / math.max(stratRisk, 1e-10)
++        supTxtL = "SUPERSEDED " + (supRL >= 0 ? "+" : "") + str.tostring(supRL, "#.##") + "R"
+         stOutSup := stOutSup + 1
+-        lastOutcome := "SUPERSEDED"
++        skipNextClose := true
++        supPendTxt := supTxtL
++        if supRL > 0
++            stWin := stWin + 1
++            stGrossW := stGrossW + supRL
++        else
++            stLoss := stLoss + 1
++            stGrossL := stGrossL - supRL
++        stNetR := stNetR + supRL
+     stratDir     := 1
+     stratDirTxt  := "BUY"
+     stratTrigTxt := trigUpTxt
+@@ -395,15 +426,26 @@ if goLong
+         label.delete(lblTP1)
+     if not na(lblTP2)
+         label.delete(lblTP2)
++    if not na(bxRisk)
++        box.delete(bxRisk)
++    if not na(bxProfit)
++        box.delete(bxProfit)
++    if not na(lblSig)
++        label.delete(lblSig)
+     if showLevels
+         lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+         lnSL    := line.new(bar_index, slBuy,  bar_index, slBuy,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+         lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+         lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
+-        lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
+-        lblSL    := label.new(bar_index, slBuy,  "SL " + f_rtxt(slBuy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
+-        lblTP1   := label.new(bar_index, tp1Buy, "T1 " + f_rtxt(tp1Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
+-        lblTP2   := label.new(bar_index, tp2Buy, "T2 " + f_rtxt(tp2Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
++        bxRisk   := box.new(left = bar_index, top = entry, right = bar_index, bottom = slBuy, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
++        bxProfit := box.new(left = bar_index, top = tp1Buy, right = bar_index, bottom = entry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
++        if not compactSignals
++            lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
++            lblSL    := label.new(bar_index, slBuy,  "SL " + f_rtxt(slBuy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
++            lblTP1   := label.new(bar_index, tp1Buy, "T1 " + f_rtxt(tp1Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
++            lblTP2   := label.new(bar_index, tp2Buy, "T2 " + f_rtxt(tp2Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
++    if showSigLabels and not cleanChart
++        lblSig := label.new(bar_index, low - atrVal * 1.0, "BUY · " + trigUpTxt + "\nSL " + str.tostring(riskAtrBuy, "#.##") + "A · TP +" + str.tostring(tp1R, "#.##") + "R", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, size = size.small)
+     if enableAlerts
+         alert(syminfo.ticker + " " + timeframe.period + ": BUY | " + trigUpTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slBuy, format.mintick) + " TP1 " + str.tostring(tp1Buy, format.mintick) + " TP2 " + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
+ 
+@@ -412,10 +454,21 @@ if goLong
+ //--------------------------------------------------------------
+ if goShort
+     strategy.entry("Short", strategy.short, qty = enableFixedRisk ? shortPosSize : na)
+-    //--- superseded long detection
+-    if stratDir == 1
++    //--- superseded long detection (true reversal only: an actual open long;
++    //    stratDir alone would also match a market-closed trade awaiting detection)
++    if strategy.position_size > 0
++        supRS = (entry - lastEntry) / math.max(stratRisk, 1e-10)
++        supTxtS = "SUPERSEDED " + (supRS >= 0 ? "+" : "") + str.tostring(supRS, "#.##") + "R"
+         stOutSup := stOutSup + 1
+-        lastOutcome := "SUPERSEDED"
++        skipNextClose := true
++        supPendTxt := supTxtS
++        if supRS > 0
++            stWin := stWin + 1
++            stGrossW := stGrossW + supRS
++        else
++            stLoss := stLoss + 1
++            stGrossL := stGrossL - supRS
++        stNetR := stNetR + supRS
+     stratDir     := -1
+     stratDirTxt  := "SELL"
+     stratTrigTxt := trigDnTxt
+@@ -459,15 +512,26 @@ if goShort
+         label.delete(lblTP1)
+     if not na(lblTP2)
+         label.delete(lblTP2)
++    if not na(bxRisk)
++        box.delete(bxRisk)
++    if not na(bxProfit)
++        box.delete(bxProfit)
++    if not na(lblSig)
++        label.delete(lblSig)
+     if showLevels
+         lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
+         lnSL    := line.new(bar_index, slSell, bar_index, slSell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
+         lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
+         lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
+-        lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
+-        lblSL    := label.new(bar_index, slSell, "SL " + f_rtxt(slSell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
+-        lblTP1   := label.new(bar_index, tp1Sell, "T1 " + f_rtxt(tp1Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.tiny)
+-        lblTP2   := label.new(bar_index, tp2Sell, "T2 " + f_rtxt(tp2Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.tiny)
++        bxRisk   := box.new(left = bar_index, top = slSell, right = bar_index, bottom = entry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
++        bxProfit := box.new(left = bar_index, top = entry, right = bar_index, bottom = tp1Sell, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
++        if not compactSignals
++            lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
++            lblSL    := label.new(bar_index, slSell, "SL " + f_rtxt(slSell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
++            lblTP1   := label.new(bar_index, tp1Sell, "T1 " + f_rtxt(tp1Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.tiny)
++            lblTP2   := label.new(bar_index, tp2Sell, "T2 " + f_rtxt(tp2Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.tiny)
++    if showSigLabels and not cleanChart
++        lblSig := label.new(bar_index, high + atrVal * 1.0, "SELL · " + trigDnTxt + "\nSL " + str.tostring(riskAtrSell, "#.##") + "A · TP +" + str.tostring(tp1R, "#.##") + "R", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
+     if enableAlerts
+         alert(syminfo.ticker + " " + timeframe.period + ": SELL | " + trigDnTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slSell, format.mintick) + " TP1 " + str.tostring(tp1Sell, format.mintick) + " TP2 " + str.tostring(tp2Sell, format.mintick), alert.freq_once_per_bar_close)
+ 
+@@ -553,7 +617,18 @@ if strategy.position_size < 0
+ //--------------------------------------------------------------
+ // Detect trade closures for outcome tracking + diagnostics
+ //--------------------------------------------------------------
+-if strategy.closedtrades > strategy.closedtrades[1]
++//--- Exit-bar flag (shared by the supersede skip, the detector, and the EXIT alert)
++isExitBar  = strategy.closedtrades > strategy.closedtrades[1]
++supSkipBar = isExitBar and skipNextClose
++
++//--- Superseded trades were already recorded at reversal time —
++//    skip their later close registration (one-shot)
++if supSkipBar
++    skipNextClose := false
++    lastOutcome := supPendTxt
++    supPendTxt := ""
++
++if isExitBar and not supSkipBar
+     ctIdx    = strategy.closedtrades - 1
+     ctExitP  = strategy.closedtrades.exit_price(ctIdx)
+     ctSize   = strategy.closedtrades.size(ctIdx)
+@@ -575,6 +650,11 @@ if strategy.closedtrades > strategy.closedtrades[1]
+         stWin := stWin + 1
+     else
+         stLoss := stLoss + 1
++    stNetR := stNetR + ctR
++    if ctR > 0
++        stGrossW := stGrossW + ctR
++    else
++        stGrossL := stGrossL - ctR
+     lastOutcome := posOut + " " + (ctR >= 0 ? "+" : "") + str.tostring(ctR, "#.##") + "R"
+     stratDir     := 0
+     stratDirTxt  := ""
+@@ -589,14 +669,18 @@ if strategy.closedtrades > strategy.closedtrades[1]
+ markerGapAtr = 0.5
+ trendCol = trendUp ? color.new(color.green, 0) : trendDn ? color.new(color.red, 0) : color.new(color.gray, 60)
+ plot(emaDir, "Trend", color = trendCol, linewidth = 2)
++//--- LuxAlgo-style trend bars (display only)
++barcolor(not colorBars ? na : trendUp ? color.green : trendDn ? color.red : na)
++bgcolor(useSessionFilter and inSession ? color.new(color.blue, 95) : na, title = "Session")
+ plot(showEMAs ? emaTrig : na, "Trigger EMA",  color = color.new(color.blue, 0), linewidth = 1)
+ plot(showEMAs ? emaSlow : na, "Slow EMA",     color = color.new(color.silver, 0), linewidth = 2)
+ 
+-plotshape(showMarkers and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
+-plotshape(showMarkers and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
++plotshape(showMarkers and not cleanChart and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
++plotshape(showMarkers and not cleanChart and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
+ 
+-alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY signal")
+-alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL signal")
++alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
++alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
++alertcondition(isExitBar, title = "CanvasV V4 EXIT", message = "CanvasV V4 EXIT {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
+ 
+ //--------------------------------------------------------------
+ // Dashboard panel (NORMAL — lightweight)
+@@ -608,27 +692,51 @@ isLong      = posSize > 0
+ isShort     = posSize < 0
+ 
+ posCurR = isLong ? (close - posAvgPrice) / math.max(stratRisk, 1e-10) : isShort ? (posAvgPrice - close) / math.max(stratRisk, 1e-10) : na
+-posCol  = isLong ? color.green : isShort ? color.red : color.silver
++//--- Live progress to TP1 for the open position (fraction of the tp1R target)
++posProg = isFlat or na(posCurR) ? na : posCurR / math.max(tp1R, 1e-10)
++progTxt = na(posProg) ? "" : " · " + str.tostring(posProg * 100, "#") + "%"
++//--- Live excursion of the open position (best/worst R since entry)
++excTxt = isFlat ? "—" : "MFE +" + str.tostring(stratMFE, "#.##") + "R · MAE -" + str.tostring(stratMAE, "#.##") + "R"
++//--- Bars elapsed since the last signal
++sigAgeTxt = na(lastSigBar) ? "" : " · " + str.tostring(bar_index - lastSigBar) + "b"
++//--- Position size for the POS row (lots/contracts at a glance)
++posQtyTxt = isFlat ? "" : str.tostring(math.abs(strategy.position_size), "#.####") + " · "
++//--- TP1 approach warning (80% of the way to TP1; realtime alerts only)
++tpWarn = enableTPWarn and ta.crossover(posProg, 0.8)
++alertcondition(tpWarn, title = "CanvasV V4 TP1 80%", message = "CanvasV V4 {{exchange}}:{{ticker}} {{interval}} 80% to TP1 @ {{close}}")
++posCol  = isFlat or na(posCurR) ? color.silver : posCurR >= 0 ? color.green : color.red
+ sigCol  = lastSigTxt == "BUY" ? color.green : lastSigTxt == "SELL" ? color.red : color.silver
++sigShowTxt = not tfOK ? "LOW TF" : lastSigTxt + sigAgeTxt
++sigShowCol = not tfOK ? color.orange : sigCol
+ tpCol   = lastSigTxt == "BUY" ? color.green : color.red
+ 
++//--- Session performance (closed trades only; R-based)
++perfN = stWin + stLoss
++perfWR = perfN > 0 ? stWin / perfN * 100 : 0.0
++perfPFTxt = perfN == 0 ? "—" : stGrossL == 0 ? "∞" : str.tostring(stGrossW / stGrossL, "#.##")
++perfTxt = perfN == 0 ? "—" : (stNetR >= 0 ? "+" : "") + str.tostring(stNetR, "#.##") + "R · " + str.tostring(perfWR, "#") + "% · PF " + perfPFTxt
++eqPct = (strategy.equity / strategy.initial_capital - 1) * 100
++eqTxt = (eqPct >= 0 ? "+" : "") + str.tostring(eqPct, "#.##") + "%"
++eqCol = eqPct >= 0 ? color.green : color.red
++
+ tfSec = timeframe.in_seconds(timeframe.period)
+ tfTxt = tfSec == 900 ? "15M" : tfSec == 60 ? "1M" : tfSec == 3600 ? "1H" : tfSec == 14400 ? "4H" : tfSec == 86400 ? "1D" : str.tostring(timeframe.period)
++tfSymTxt = syminfo.ticker + " · " + tfTxt
+ 
+ var table v4panel = na
+ 
+-if showPanel
++if showPanel and not cleanChart
+     if na(v4panel)
+-        v4panel := table.new(position.top_right, 2, 9, border_width = 1, border_color = color.new(color.gray, 50), bgcolor = color.new(color.rgb(26, 26, 32), 10))
++        v4panel := table.new(position.top_right, 2, 12, border_width = 1, border_color = color.new(color.gray, 50), bgcolor = color.new(color.rgb(26, 26, 32), 10))
+     trendTxt = trendUp ? "BULL ↑" : trendDn ? "BEAR ↓" : "RANGE"
+     trendColN = trendUp ? color.green : trendDn ? color.red : color.silver
+-    posTxt = isLong ? "LONG " + str.tostring(stratAge) + "b" : isShort ? "SHORT " + str.tostring(stratAge) + "b" : lastOutcome != "" ? "FLAT · " + lastOutcome : "FLAT"
++    posTxt = isLong ? "LONG " + posQtyTxt + str.tostring(stratAge) + "b" + progTxt : isShort ? "SHORT " + posQtyTxt + str.tostring(stratAge) + "b" + progTxt : lastOutcome != "" ? "FLAT · " + lastOutcome : "FLAT"
+     table.cell(v4panel, 0, 0, "CANVASV V4", text_color = color.white, text_size = size.normal)
+     table.cell(v4panel, 1, 0, VERSION, text_color = color.silver, text_size = size.small)
+-    table.cell(v4panel, 0, 1, tfTxt, text_color = color.silver, text_size = size.small)
++    table.cell(v4panel, 0, 1, tfSymTxt, text_color = color.silver, text_size = size.small)
+     table.cell(v4panel, 1, 1, trendTxt, text_color = trendColN, text_size = size.normal)
+     table.cell(v4panel, 0, 2, "SIGNAL", text_color = color.silver, text_size = size.small)
+-    table.cell(v4panel, 1, 2, lastSigTxt, text_color = sigCol, text_size = size.large)
++    table.cell(v4panel, 1, 2, sigShowTxt, text_color = sigShowCol, text_size = size.large)
+     table.cell(v4panel, 0, 3, "POS", text_color = color.silver, text_size = size.small)
+     table.cell(v4panel, 1, 3, posTxt, text_color = posCol, text_size = size.normal)
+     table.cell(v4panel, 0, 4, "ENTRY", text_color = color.silver, text_size = size.small)
+@@ -641,6 +749,12 @@ if showPanel
+     table.cell(v4panel, 1, 7, na(lastRiskAtr) ? "—" : str.tostring(lastRiskAtr, "#.##") + "A", text_color = color.white, text_size = size.small)
+     table.cell(v4panel, 0, 8, "W/L", text_color = color.silver, text_size = size.small)
+     table.cell(v4panel, 1, 8, str.tostring(stWin) + "W/" + str.tostring(stLoss) + "L  SL" + str.tostring(stOutSl) + " T1" + str.tostring(stOutTp1) + " T2" + str.tostring(stOutTp2), text_color = color.white, text_size = size.small)
++    table.cell(v4panel, 0, 9, "PERF", text_color = color.silver, text_size = size.small)
++    table.cell(v4panel, 1, 9, perfTxt, text_color = color.white, text_size = size.small)
++    table.cell(v4panel, 0, 10, "MFE/MAE", text_color = color.silver, text_size = size.small)
++    table.cell(v4panel, 1, 10, excTxt, text_color = color.white, text_size = size.small)
++    table.cell(v4panel, 0, 11, "EQUITY", text_color = color.silver, text_size = size.small)
++    table.cell(v4panel, 1, 11, eqTxt, text_color = eqCol, text_size = size.normal)
+ else
+     if not na(v4panel)
+         table.delete(v4panel)
+diff --git a/backtest/engine.mjs b/backtest/engine.mjs
+index b0712ce..21c31c4 100644
+--- a/backtest/engine.mjs
++++ b/backtest/engine.mjs
+@@ -1,11 +1,12 @@
+ // CanvasV V4 FAST — Local Signal Engine
+-// Faithfully reproduces the TradingView Pine Script v4.2.0 signal logic
++// Faithfully reproduces the TradingView Pine Script v4.3.0 signal logic
+ // (all DEFAULT_PARAMS match the Pine input defaults exactly).
+ // Single-timeframe only (no MTF/security calls in production).
+ // Deliberate gaps vs Pine (all default-OFF execution extras in the .pine):
+ //   partial TP, break-even-after-TP1, session filter, commission/slippage.
+ // The engine additionally reports AMBIGUOUS (SL+TP same bar) and STALE_EXIT
+ // outcomes, which the Pine strategy classifies by exit price alone.
++// v4.3.0: TP exits credit exact limit R (tp1R/tp2R), matching TV limit fills.
+ 
+ import fs from "node:fs";
+ import path from "node:path";
+@@ -43,11 +44,11 @@ export const DEFAULT_PARAMS = {
+   tp1R: 1.0,
+   tp2R: 2.5,
+   atrFallbackMult: 1.5,
+-  atrStopMult: 1.5,
++  atrStopMult: 1.25,
+ 
+   // Position Sizing (Phase 2)
+   enableFixedRisk: true,
+-  riskPerTrade: 0.5,
++  riskPerTrade: 1.0,
+   maxPosSize: 0,
+ 
+   // Breakout Quality (Phase 3)
+@@ -474,10 +475,13 @@ export function runEngine(candles, params = DEFAULT_PARAMS, opts = {}) {
+         finalR = Math.abs(posSL - posEntry) < 0.01 ? 0.0 : -1.0;
+       } else if (tp2Hit) {
+         outcome = "TP2 FIRST";
+-        finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
++        // Limit fill (v4.3.0): TradingView fills limit orders at the limit price.
++        // Close-based credit added ~0.25R random noise per TP trade — validated
++        // 132/132 exit reasons identical before/after; only TP R changed.
++        finalR = p.tp2R;
+       } else if (tp1Hit) {
+         outcome = "TP1 FIRST";
+-        finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
++        finalR = p.tp1R;
+       } else if (posAge >= p.outcomeBars) {
+         outcome = "EXPIRED";
+         finalR = posState === 1 ? (c.close - posEntry) / Math.max(posRisk, 1e-10) : (posEntry - c.close) / Math.max(posRisk, 1e-10);
+@@ -527,8 +531,12 @@ export function runEngine(candles, params = DEFAULT_PARAMS, opts = {}) {
+     // Note: the pullback-momentum gate (pbMomOk) was removed as dead code — pullbackUp/Dn
+     // already require close > emaTrig (reclaimUp) / close < emaTrig (reclaimDn), so it was
+     // mathematically always true.
+-    const entryUp = cfgOk && setupUp && triggerUp && !hvBlock && extOkUp && bodyOkUp && hvVolOkUp && hvCloseOkUp && riskGateBuyOk && canEnterLong;
+-    const entryDn = cfgOk && setupDn && triggerDn && !hvBlock && extOkDn && bodyOkDn && hvVolOkDn && hvCloseOkDn && riskGateSellOk && canEnterShort;
++    // Research-only entry veto: opts.entryFilter(barIdx, side, isPullback) -> false blocks.
++    // Absent by default, so the production path is byte-identical.
++    const entryOkUp = typeof opts.entryFilter === 'function' ? opts.entryFilter(barIdx, 1, pullbackUpV) !== false : true;
++    const entryOkDn = typeof opts.entryFilter === 'function' ? opts.entryFilter(barIdx, -1, pullbackDnV) !== false : true;
++    const entryUp = cfgOk && setupUp && triggerUp && !hvBlock && extOkUp && bodyOkUp && hvVolOkUp && hvCloseOkUp && riskGateBuyOk && canEnterLong && entryOkUp;
++    const entryDn = cfgOk && setupDn && triggerDn && !hvBlock && extOkDn && bodyOkDn && hvVolOkDn && hvCloseOkDn && riskGateSellOk && canEnterShort && entryOkDn;
+ 
+     // Fixed-risk position sizing (Phase 2)
+     const equity = 10000; // Fixed for backtest
+@@ -736,7 +744,7 @@ export function analyzeSLFailures(trades, candles, window = 20) {
+ // ─── Performance report ───────────────────────────────────────────
+ 
+ export function generateReport(trades, opts = {}) {
+-  const riskPct = opts.riskPerTrade ?? 0.5; // % of equity risked per trade (for account % DD)
++  const riskPct = opts.riskPerTrade ?? 1.0; // % of equity risked per trade (for account % DD)
+   const closed = trades.filter(t => t.exitReason !== "SUPERSEDED");
+   const winners = closed.filter(t => t.finalR > 0);
+   const losers = closed.filter(t => t.finalR < 0);
+diff --git a/backtest/engine/output/V4-HTF-SESSION-MM-v45.md b/backtest/engine/output/V4-HTF-SESSION-MM-v45.md
+new file mode 100644
+index 0000000..113db52
+--- /dev/null
++++ b/backtest/engine/output/V4-HTF-SESSION-MM-v45.md
+@@ -0,0 +1,102 @@
++# V4 research track 2 — BTC-100 forensics + HTF/session gates + money management
++
++Date: 2026-09-12. Status: RESEARCH COMPLETE — no production defaults changed (v4.3.4 + `entryFilter` hook only).
++Prior track: `V4-SIGNAL-UPGRADE-v44.md` (triple-combo, ON HOLD). This track answers the user ask:
++100+ BTC signals examined, signal accuracy, money management, no 1m/5m signals, HTF confirmation.
++
++## 1. Method (reproduce)
++
++1. `node resample-htf.mjs` — builds 1H (4320) + 4H (1080) bars × 3 symbols from tracked 15m data
++   (verified: timestamps hour/4H-aligned, closes match, zero gaps; Binance 1H ≡ aggregated 15m).
++2. `node forensics-btc100.mjs` — 167 BTC signals (wide-net config), issue-by-issue buckets.
++   Wide-net exists ONLY to generate hypotheses (167 signals); every hypothesis is then
++   TESTED on production configs below. Wide-net cuts are not production evidence.
++3. `node research-gates.mjs [exp]` — 11 gate experiments × base/triple × 3 symbols = 66 runs,
++   via the research-only `opts.entryFilter(bar,side,isPullback)` hook in `engine.mjs`
++   (hook absent by default → production path bit-identical, re-verified BTC 48t/+8.06R).
++   HTF mapping uses the last CONFIRMED HTF bar (no lookahead); indicator warmup ⇒ block.
++4. `node mm-ladder.mjs` — fixed-fractional compounding curves, per-symbol + merged 3-symbol portfolio.
++
++## 2. BTC-100 forensics (wide-net, 167/167 joined, net +3.04R, PF 1.06)
++
++| cut | finding (WIDE-NET CONTEXT ONLY) |
++|---|---|
++| direction | BUY +11.04R/55% vs SELL −7.99R/43% |
++| trigger | BUY-PB +13.68R/63%/PF2.10 vs SELL-PB −6.29R/42%; BO both sides ≈ −2R |
++| session UTC | 00–04 −3.99R/31t, 04–08 −2.17R, 08–12 +1.51R, 12–16 +3.82R, 16–20 +3.95R/70%, 20–24 −0.08R |
++| extAtr 1.5–2.0 | −7.60R/52t (but production maxExtAtr sweep already rejected 1.0 — do not stack) |
++| riskAtr 5+ | −1.77R/9t · bodyPct 20–40 −7.44R/23t · relVol flat (0.99–1.24, no edge) |
++| exits | TP1 43/+43R, SL 38/−38R, STALE-70t 70/−1.95R, EXP 16/±0 · MFE|win 0.94R, MAE|loss 0.86R |
++
++Hypotheses generated: H1 session filter 08–20 UTC · H2 kill SELL pullback-fills · H3 HTF veto (user ask).
++Verdict on EACH hypothesis comes from §3 (production configs), not from this table.
++
++## 3. Gate tests — ALL 11 variants fail or are noise (ΔR vs ungated, halves green = both halves ≥ 0)
++
++Base total 21.97R (132 trades) · Triple total 37.42R (206 trades). Halves detail in console output.
++
++| # | gate | base ΔR | triple ΔR | verdict |
++|---|---|---|---|---|
++| 1 | h1stack (1H close vs EMA50) | −1.23 | −3.51 | REJECT |
++| 2 | h1ema (1H EMA21 vs 50) | −6.92 | −9.99 | REJECT |
++| 3 | h4slope (4H EMA50 5-bar slope) | −10.16 | −15.26 | REJECT |
++| 4 | h1h4 (stack + slope) | −8.95 | −14.08 | REJECT |
++| 5 | h4pos (4H close vs EMA50) | −7.91 | −13.16 | REJECT |
++| 6 | h1slope (1H EMA50 5-bar slope) | −0.42 | −0.89 | NOISE (helps SOL, hurts ETH — inconsistent) |
++| 7 | h1soft (veto only beyond 0.25 ATR wrong side) | +0.51 | −2.28 | NOISE (blocks ~8% trades, ±0.5R) |
++| 8 | h1stack-pb (stack veto on pullbacks only) | −1.42 | −3.11 | REJECT |
++| 9 | sess0820 (08–20 UTC only) | −9.50 | −18.13 | REJECT — H1 dead |
++| 10 | sess1220 (12–20 UTC only) | −17.93 | −28.52 | REJECT — H1 dead |
++| 11 | nosellpb (kill SELL pullback-fills) | −9.63 | −14.94 | REJECT — H2 dead |
++
++Key observations:
++
++- **H2 (SELL-PB toxic) was a wide-net artifact.** Under production filters SELL pullback-fills
++  are FINE (BTC Δ−0.51 ≈ neutral) to GREAT (SOL Δ−7.01 of value destroyed by killing them).
++  The loosened wide-net regime (0.03 chop) is what killed SELL-PBs, not the trigger itself.
++- **H1 (dead hours bleed) was a wide-net artifact.** Production filters (volume gate etc.)
++  already select the tradeable dead-hour moves (+9.5R of value lives outside 08–20 UTC on base).
++  Curiosity: sess0820 on triple keeps BTC +11.29R/25t (Δ−0.90) but ETH/SOL collapse — no transfer ⇒ reject.
++- **HTF veto fails structurally, not by tuning.** 8 variants (stack/EMA/slope/position/soft/PB-only,
++  1H/4H/both) × 2 configs: every one ≤ noise. Reason: V4-15m IS already a trend filter
++  (EMA50 slope + regime gates). A slower HTF veto adds lag and deletes valid early-trend entries —
++  the most profitable ones, where HTF has not turned yet. The softer the veto, the closer to
++  zero the effect (h1soft blocks 8% of trades for +0.51R base / −2.28R triple = noise).
++- **This empirically confirms the V3→V4 decision.** V3 WAS a 4H+1H+15M MTF stack and was retired
++  for single-TF V4. Re-adding MTF as a veto reproduces the old weakness (−10 to −28R damage).
++
++## 4. Money management ladder (fixed-fractional compounding, 6 months)
++
++| config | risk/trade | BTC %Net/%DD | ETH %Net/%DD | SOL %Net/%DD | PORT %Net/%DD/Calmar |
++|---|---|---|---|---|---|
++| base | 0.25% | — | — | — | ≈+5.6 / 1.1 |
++| base | 0.5% | +4.1 / 1.0 | +3.7 / 1.5 | +3.3 / 1.4 | **+11.5 / 2.1 / 5.6** |
++| base | 1% | — | — | — | **+24.1 / 4.1** |
++| base | 2% | — | — | — | +53 / 8.1 |
++| triple | 0.5% | — | — | — | +20.4 / 3.1 |
++| triple | 1% | — | — | — | **+44.5 / 6.2** |
++| triple | 2% | — | — | — | +106 / 12.1 |
++
++- Portfolio R-drawdown (base 4.17R) ≪ sum of symbols (7.83R) ⇒ diversification works:
++  run all 3 symbols, not one.
++- Drawdowns are small because the edge is smooth (win-every-month profile on base).
++  Tentative recommendation (needs approval — it is your risk tolerance):
++  **riskPerTrade default 0.5% → 1.0%** (+24.1%/4.1% DD base, +44.5%/6.2% DD triple).
++
++## 5. Recommendations → user decisions 2026-09-12: R1 REJECTED (no MTF package at all), R2 kept (session tool, default OFF — unchanged), R3 APPROVED + IMPLEMENTED (risk 1.0%), R4 decided: v4.3.4 base kept, triple v4.4.0 REJECTED. The standalone minChartTF lock (default 15, v4.3.5) implements the "no 1m/5m signals" ask without the rejected MTF package.
++
++R1. **Do NOT ship any HTF veto as default** (11/11 fail). Ship instead an MTF package:
++   (a) MTF bias DISPLAY — 1H/4H trend state in the dashboard (LuxAlgo-style context, zero backtest harm);
++   (b) optional `useMTFFilter` veto inputs, default OFF, for TradingView experimentation;
++   (c) `minChartTF` entry guard, default "15" — implements the explicit no-1m/5m-signals ask
++   (signals print only on 15m+ charts; user can lower the input).
++R2. **Keep the Pine session filter as user tool, default OFF** (production needs no session gate).
++R3. **MM: risk default → 1.0% + run 3-symbol portfolio** (pending your approval).
++R4. Signal core still pending: adopt triple-combo (v4.4.0, +15.45R evidence) or keep v4.3.4 base.
++   This track's gates were tested on BOTH — neither needs HTF.
++
++## 6. Files
++
++Scripts: `resample-htf.mjs`, `forensics-btc100.mjs`, `research-gates.mjs`, `mm-ladder.mjs`
++(all research-only, root of `backtest/`). Data: `engine/data/*-{1h,4h}.json` (regenerable via §1.1).
++Engine: `entryFilter` hook in `engine.mjs` (research-only, production-identical when absent).
+diff --git a/backtest/engine/output/V4-SIGNAL-UPGRADE-v44.md b/backtest/engine/output/V4-SIGNAL-UPGRADE-v44.md
+new file mode 100644
+index 0000000..1618130
+--- /dev/null
++++ b/backtest/engine/output/V4-SIGNAL-UPGRADE-v44.md
+@@ -0,0 +1,129 @@
++# V4 Signal Upgrade Research (v4.4.0 candidate — REJECTED by user 2026-09-12, v4.3.4 base kept; retained for reference)
++
++Date: 2026-09-12 · Engine: `backtest/engine.mjs` (v4.3.0) · Data: 15m Binance,
++~180 days × 3 symbols (17,280 candles each), in-sample.
++Method: `simple-test.mjs --vs` A/B per symbol, totals across BTC+ETH+SOL,
++90/90 halves stability for finalists, neighbor robustness for the winner.
++
++Base (production defaults): BTC 48t/+8.06R · ETH 46t/+7.33R · SOL 38t/+6.58R.
++**Total 21.97R**, 132 trades, 6/6 halves positive.
++
++## Round 1 — 35 single-param variants (entry side only)
++
++| Variant | Total R | BTC | ETH | SOL | Verdict |
++|---|---|---|---|---|---|
++| base | 21.97 | +8.06 | +7.33 | +6.58 | — |
++| useStrictExt=false | **28.32** | +8.45 | +10.13 | +9.74 | FINAList |
++| swingLookback=7 | **28.32** | +9.52 | +12.51 | +6.29 | Finalist |
++| maxExtAtr=2.0 | **28.14** | +8.45 | +9.95 | +9.74 | Finalist |
++| closeLocMinShort=0.40 | 25.47 | +9.06 | +9.83 | +6.58 | Luck (2 trades) → reject |
++| breakoutBars=7 | **24.46** | +8.96 | +8.11 | +7.39 | Finalist (all 3 +) |
++| maxRiskAtr=5.0 | 24.44 | +11.17 | +7.88 | +5.39 | Unstable halves → reject |
++| maxRiskAtr=6.0 | 23.58 | +10.99 | +6.88 | +5.71 | Worse than 5.0 → reject |
++| highVolPct=150 | 23.04 | +8.17 | +8.33 | +6.54 | Mild, not pursued |
++| closeLocMinShort=0.20 | 22.11 | +8.06 | +7.47 | +6.58 | Noise → reject |
++| hvMode=Block | 21.92 | +8.28 | +7.27 | +6.37 | Noise → reject |
++| breakoutBuffer=0.15 | 21.97 | +8.06 | +7.33 | +6.58 | No effect |
++| breakoutExtAtr=1.5/2.5 | 21.97 | — | — | — | No effect (dead gate, confirmed) |
++| pullbackLookback=3/7 | 21.97 | — | — | — | No effect (touch never binds) |
++| pullbackTolPct=0.25/1.0 | 21.97 | — | — | — | No effect |
++| hvMode=Allow | 21.04 | +6.17 | +8.33 | +6.54 | Reject (BTC −1.89) |
++| breakoutBars=15 | 21.03 | +8.06 | +7.39 | +5.58 | Reject |
++| breakoutBuffer=0.05 | 20.97 | +8.06 | +6.33 | +6.58 | Reject |
++| volMinBreakout=1.4 | 20.76 | +8.06 | +6.12 | +6.58 | Reject |
++| minBodyPct=10 | 21.59 | +7.68 | +7.33 | +6.58 | Reject |
++| highVolPct=120 | 20.30 | +6.06 | +7.66 | +6.58 | Reject |
++| volMinBreakout=1.0 | 20.14 | +8.06 | +6.51 | +5.57 | Reject |
++| minBodyPct=20 | 19.43 | +6.91 | +6.94 | +5.58 | Reject |
++| breakoutBuffer=0.20 | 19.44 | +7.98 | +4.83 | +6.63 | Reject (kills ETH BO) |
++| regimeMinSlope=0.03 | 19.21 | +7.31 | +9.98 | +1.92 | Reject (SOL −4.67) |
++| closeLocMinLong=0.80 | 19.18 | +7.98 | +4.62 | +6.58 | Reject |
++| enableBreakout=false | 18.42 | +8.98 | +3.81 | +5.63 | Keep breakouts (ETH −3.52 w/o) |
++| regimeBars=15 | 18.20 | +4.46 | +7.83 | +5.91 | Reject |
++| volMinPullback=1.0 | 18.16 | +7.24 | +6.98 | +3.94 | Reject (1.10 is sweet spot) |
++| regimeMinSlope=0.075 | 15.69 | +2.74 | +7.93 | +5.02 | Reject (strictRegime re-confirmed) |
++| volMinPullback=1.3 | 13.24 | +4.91 | +3.23 | +5.10 | Reject |
++| regimeBars=7 | 12.30 | +2.09 | +7.60 | +2.61 | Reject |
++| maxExtAtr=1.0 | 11.91 | +4.39 | +2.99 | +4.53 | Reject (filter too tight) |
++| swingLookback=15 | 10.89 | +4.29 | +3.32 | +3.28 | Reject |
++| momSlopeBars=2 | 9.92 | +7.69 | +3.40 | −1.17 | Reject (3 is load-bearing) |
++| momSlopeBars=5 | 7.42 | +5.47 | +0.83 | +1.12 | Reject |
++| structBufferAtr=1.0 | 6.89 | +2.05 | +1.93 | +2.91 | Reject |
++| enablePullback=false | 4.56 | +0.09 | +3.52 | +0.95 | Pullbacks ARE the system |
++| useSessionFilter=true | ERR | — | — | — | Engine doesn't model it (known gap) |
++
++Key reads: pullback volume 1.10 is a sharp optimum; momentum/regime core (3/10)
++is load-bearing; breakout-ext gate is dead code (zero effect both directions);
++the 1.5-ATR extension cap rejects ~6R of good trades.
++
++## Round 2 — halves stability (Δ vs base, H1/H2)
++
++| Variant | BTC | ETH | SOL | Green |
++|---|---|---|---|---|
++| useStrictExt=false (+6.35) | +0.88 / −0.49 | +2.02 / +0.78 | +3.55 / −0.39 | 4/6 |
++| swingLookback=7 (+6.35) | +1.02 / +0.43 | +0.34 / +4.84 | +0.69 / −0.98 | 4/6, ETH conc. |
++| closeLocMinShort=0.40 (+3.50) | 0 / +1.00 | +2.50 / 0 | 0 / 0 | 2-trade luck → DROP |
++| breakoutBars=7 (+2.49) | +1.00 / −0.11 | +0.78 / 0 | −0.19 / +1.00 | 4/6, small+consistent |
++| maxRiskAtr=5.0 (+2.47) | +1.04 / +2.06 | −2.88 / +3.42 | +0.32 / −1.51 | whiplash → DROP |
++
++## Round 3 — refinement + combos
++
++| Variant | Total R | BTC | ETH | SOL |
++|---|---|---|---|---|
++| maxExtAtr=1.75 | 25.08 | +8.71 | +6.95 | +9.42 |
++| maxExtAtr=2.5 | 28.32 | +8.45 | +10.13 | +9.74 | (= off; nothing past 2.5) |
++| breakoutBars=5 | 20.59 | +8.96 | +6.56 | +5.07 |
++| breakoutBars=6 | 23.01 | +8.96 | +6.98 | +7.07 |
++| breakoutBars=8 | 21.65 | +7.96 | +7.11 | +6.58 |
++| swingLookback=5 | 28.18 | +12.15 | +9.31 | +6.72 |
++| swingLookback=6 | 27.43 | +11.00 | +10.37 | +6.06 |
++| **swingLookback=8** | **29.42** | +10.91 | +10.74 | +7.77 |
++| swingLookback=9 | 24.15 | +7.98 | +8.30 | +7.87 |
++| swing8+ext2.0 | 33.10 | +11.30 | +10.87 | +10.93 |
++| swing8+bb7 | 31.89 | +11.81 | +11.50 | +8.58 |
++| ext2.0+bb7 | 32.68 | +9.35 | +12.54 | +10.79 |
++| **swing8+ext2.0+bb7 (TRIPLE)** | **37.42** | +12.19 | +13.35 | +11.88 |
++| swing7+ext2.0+bb7 (robust) | 34.89 | +10.30 | +15.00 | +9.59 |
++| swing8+ext2.5+bb7 (robust) | 37.72 | +12.15 | +13.53 | +12.04 |
++
++swingLookback 5–8 is a broad plateau (all +5.5R or better); 8 is the peak.
++Neighbors of the triple hold (+12.9R / +15.7R) → plateau, not knife-edge.
++
++## Winner: TRIPLE (swingLookback=8, maxExtAtr=2.0, breakoutBars=7)
++
++Full window: **37.42R total (+15.45 over base)**, 206 trades (132 base).
++BTC 65t +12.19R (WR 58.5%, PF 1.7, DD 2.00R) · L 39/+8.50 S 26/+3.69
++ETH 72t +13.35R (WR 54.2%, PF 1.8, DD 5.38R) · L 43/+6.07 S 29/+7.28
++SOL 69t +11.88R (WR 60.9%, PF 1.7, DD 4.44R) · L 33/−2.97 S 36/+14.85
++
++Halves Δ: BTC +2.28/+1.85 ✓✓ · ETH +2.40/+3.61 ✓✓ · SOL +6.23/−0.93 (5/6 green).
++BTC shorts fixed (+0.51 → +3.69). SOL longs worsen (−1.38 → −2.97);
++SOL shorts carry (+7.96 → +14.85).
++
++## Caveats (read before shipping)
++
++1. **In-sample**: discovery and measurement use the same 180 days. Fresh-data
++   holdout was attempted but the Binance fetch failed (network), so no
++   out-of-sample confirmation exists yet.
++2. **ETH/SOL drawdown rises** (ETH 3.06→5.38R, SOL 2.77→4.44R) — bumpier ride.
++3. **56% more trades** (132→206) → more commission/slippage drag live than the
++   engine's gross-R shows (Pine models 0.04% + 1 tick; still small vs +15.45R).
++4. Multiple testing: ~45 variants tried; mild overfit risk remains despite the
++   halves + neighbor checks. The plateau shape (not spike) is the best defense.
++
++## Recommendation → v4.4.0 "signal upgrade" (needs user approval)
++
++Defaults change (Pine full + lite + engine + docs + baselines):
++`swingLookback 10 → 8`, `maxExtAtr 1.5 → 2.0`, `breakoutBars 10 → 7`.
++Expected (in-sample): BTC 65t/+12.19R · ETH 72t/+13.35R · SOL 69t/+11.88R.
++Plus: new `enableLong`/`enableShort` inputs (default true, no behavior change)
++so users can cut e.g. SOL longs themselves (−2.97R pocket).
++
++Extended reject list (do not retry): closeLocMinShort=0.40 (2-trade luck);
++maxRiskAtr=5.0/6.0 (unstable/dilutive); maxExtAtr=1.0; momSlopeBars≠3;
++regimeBars≠10; structBufferAtr=1.0; swingLookback=15; volMinPullback≠1.10;
++breakoutBars=5/8/15; closeLocMinLong≠0.70; minBodyPct>0; highVolPct≠130±;
++hvMode≠StrongerConfirmation; useSessionFilter (engine can't model).
++Prior standing rejects still hold: volOff; expiry12/stale10; maxRisk3;
++stop≤0.5; stop1.0+looseReg; midBE-on; strictRegime; stop2.0;
++stacked stop1.0+tpClose+noBtQ; exits 50/50, full@0.75R, 50%@0.75+BE.
+diff --git a/backtest/forensics-btc100.mjs b/backtest/forensics-btc100.mjs
+new file mode 100644
+index 0000000..506fedc
+--- /dev/null
++++ b/backtest/forensics-btc100.mjs
+@@ -0,0 +1,78 @@
++// BTC 100+ signal forensics: wide-net entries joined with outcomes,
++// bucketed by every captured feature to find accuracy filters.
++// Research only — production defaults untouched.
++import fs from 'node:fs';
++import path from 'node:path';
++import { runEngine, DEFAULT_PARAMS } from './engine.mjs';
++
++const candles = JSON.parse(
++  fs.readFileSync(path.join(import.meta.dirname, 'engine', 'data', 'BTCUSDT-15m.json'), 'utf8')
++);
++const wide = {
++  swingLookback: 8, maxExtAtr: 2.0, breakoutBars: 7,
++  regimeMinSlope: 0.03, volMinPullback: 1.0, maxRiskAtr: 6.0,
++};
++const { signals, trades } = runEngine(candles, { ...DEFAULT_PARAMS, ...wide });
++const side = (d) => (d === 'BUY' || d === 'LONG' || d === 1 ? 'L' : 'S');
++const byKey = new Map();
++for (const t of trades) byKey.set(t.entryBar + side(t.direction), t);
++const rows = [];
++let unmatched = 0;
++for (const s of signals) {
++  const t = byKey.get(s.bar + side(s.direction));
++  if (!t) { unmatched++; continue; }
++  rows.push({ ...s, R: t.finalR, mfe: t.mfe, mae: t.mae, exit: t.exitReason, age: t.age });
++}
++console.log(`signals=${signals.length} trades=${trades.length} joined=${rows.length} unmatched=${unmatched}`);
++
++const summ = (rs) => {
++  const n = rs.length;
++  if (!n) return 'n=0';
++  const w = rs.filter((r) => r.R > 0);
++  const net = rs.reduce((a, r) => a + r.R, 0);
++  const gw = w.reduce((a, r) => a + r.R, 0);
++  const gl = rs.filter((r) => r.R <= 0).reduce((a, r) => a - r.R, 0);
++  return `n=${n} W=${(w.length / n * 100).toFixed(0)}% Net=${net >= 0 ? '+' : ''}${net.toFixed(2)}R avg=${(net / n).toFixed(3)} PF=${gl > 0 ? (gw / gl).toFixed(2) : 'inf'}`;
++};
++const cut = (name, fn) => {
++  console.log(`--- ${name} ---`);
++  const groups = new Map();
++  for (const r of rows) {
++    const k = fn(r);
++    if (!groups.has(k)) groups.set(k, []);
++    groups.get(k).push(r);
++  }
++  for (const [k, rs] of [...groups.entries()].sort((a, b) => (a[0] > b[0] ? 1 : -1))) {
++    console.log(`  ${String(k).padEnd(22)} ${summ(rs)}`);
++  }
++};
++console.log('ALL: ' + summ(rows));
++cut('direction', (r) => r.direction);
++cut('trigger', (r) => r.trigger);
++cut('dir x trigger', (r) => r.direction + ' ' + (r.trigger === 'PULLBACK RESUME' ? 'PB' : 'BO'));
++cut('relVol', (r) => {
++  const v = r.relVol;
++  if (v == null || Number.isNaN(v)) return 'na';
++  return v < 1.0 ? '<1.0' : v < 1.2 ? '1.0-1.2' : v < 1.5 ? '1.2-1.5' : v < 2.0 ? '1.5-2.0' : '2.0+';
++});
++cut('extAtr', (r) => {
++  const v = Math.abs(r.extAtr);
++  return v < 0.5 ? '<0.5' : v < 1.0 ? '0.5-1.0' : v < 1.5 ? '1.0-1.5' : v < 2.0 ? '1.5-2.0' : '2.0+';
++});
++cut('hourUTC', (r) => String(new Date(r.time).getUTCHours()).padStart(2, '0'));
++cut('sessionUTC', (r) => {
++  const h = new Date(r.time).getUTCHours();
++  return h < 4 ? '00-04' : h < 8 ? '04-08' : h < 12 ? '08-12' : h < 16 ? '12-16' : h < 20 ? '16-20' : '20-24';
++});
++cut('riskAtr', (r) => {
++  const v = r.riskAtr;
++  return v < 1.5 ? '<1.5' : v < 2.5 ? '1.5-2.5' : v < 3.5 ? '2.5-3.5' : v < 5.0 ? '3.5-5.0' : '5.0+';
++});
++cut('bodyPct', (r) => {
++  const v = r.bodyPct;
++  return v < 20 ? '<20' : v < 40 ? '20-40' : v < 60 ? '40-60' : '60+';
++});
++cut('exitReason', (r) => r.exit);
++const mfeW = rows.filter((r) => r.R > 0).reduce((a, r) => a + r.mfe, 0) / Math.max(1, rows.filter((r) => r.R > 0).length);
++const maeL = rows.filter((r) => r.R <= 0).reduce((a, r) => a + r.mae, 0) / Math.max(1, rows.filter((r) => r.R <= 0).length);
++console.log(`MFE|win=${mfeW.toFixed(2)}R MAE|loss=${maeL.toFixed(2)}R`);
+diff --git a/backtest/mm-ladder.mjs b/backtest/mm-ladder.mjs
+new file mode 100644
+index 0000000..aa2868a
+--- /dev/null
++++ b/backtest/mm-ladder.mjs
+@@ -0,0 +1,64 @@
++// Money-management ladder: account curves (compounding) from trade R series,
++// per symbol and merged 3-symbol portfolio, at several risk-% levels.
++// Research only — reads runEngine trades, changes nothing.
++import fs from 'node:fs';
++import path from 'node:path';
++import { runEngine, DEFAULT_PARAMS } from './engine.mjs';
++
++const DIR = path.join(import.meta.dirname, 'engine', 'data');
++const SYMS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
++const CFGS = {
++  base: {},
++  triple: { swingLookback: 8, maxExtAtr: 2.0, breakoutBars: 7 },
++};
++const RISKS = [0.25, 0.5, 1.0, 2.0];
++
++const curve = (Rs, risk) => {
++  let eq = 1;
++  let peak = 1;
++  let maxDD = 0;
++  for (const R of Rs) {
++    eq *= 1 + (R * risk) / 100;
++    if (eq > peak) peak = eq;
++    const dd = ((peak - eq) / peak) * 100;
++    if (dd > maxDD) maxDD = dd;
++  }
++  return { net: (eq - 1) * 100, dd: maxDD };
++};
++const rdd = (Rs) => {
++  let c = 0;
++  let peak = 0;
++  let mdd = 0;
++  for (const R of Rs) {
++    c += R;
++    if (c > peak) peak = c;
++    if (peak - c > mdd) mdd = peak - c;
++  }
++  return mdd;
++};
++
++for (const [name, ov] of Object.entries(CFGS)) {
++  console.log(`### ${name} ${JSON.stringify(ov)}`);
++  const all = [];
++  for (const s of SYMS) {
++    const candles = JSON.parse(fs.readFileSync(path.join(DIR, `${s}-15m.json`), 'utf8'));
++    const { trades } = runEngine(candles, { ...DEFAULT_PARAMS, ...ov });
++    const sorted = [...trades].sort((a, b) => a.exitTime - b.exitTime);
++    const Rs = sorted.map((t) => t.finalR);
++    const sumR = Rs.reduce((a, x) => a + x, 0);
++    const cells = RISKS.map((r) => {
++      const c = curve(Rs, r);
++      return `${r}%: Net ${c.net >= 0 ? '+' : ''}${c.net.toFixed(1)}% DD ${c.dd.toFixed(1)}%`;
++    }).join(' | ');
++    console.log(`  ${s} n=${Rs.length} sumR=${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)} Rdd=${rdd(Rs).toFixed(2)}R :: ${cells}`);
++    for (const t of sorted) all.push(t);
++  }
++  all.sort((a, b) => a.exitTime - b.exitTime);
++  const Rs = all.map((t) => t.finalR);
++  const sumR = Rs.reduce((a, x) => a + x, 0);
++  const cells = RISKS.map((r) => {
++    const c = curve(Rs, r);
++    return `${r}%: Net ${c.net >= 0 ? '+' : ''}${c.net.toFixed(1)}% DD ${c.dd.toFixed(1)}% Calmar ${(c.dd > 0 ? c.net / c.dd : 99).toFixed(1)}`;
++  }).join(' | ');
++  console.log(`  PORT n=${Rs.length} sumR=${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)} Rdd=${rdd(Rs).toFixed(2)}R :: ${cells}`);
++}
+diff --git a/backtest/resample-htf.mjs b/backtest/resample-htf.mjs
+new file mode 100644
+index 0000000..ddd2f78
+--- /dev/null
++++ b/backtest/resample-htf.mjs
+@@ -0,0 +1,39 @@
++// Resample 15m candles -> exact 1H / 4H candles.
++// Valid only for uniform, gap-free 15m series (verified below): HTF bar i
++// covers 15m bars [i*N, i*N+N). Same-exchange aggregation, no lookahead risk.
++import fs from 'node:fs';
++import path from 'node:path';
++const DIR = path.join(import.meta.dirname, 'engine', 'data');
++const agg = (cs) => ({
++  timestamp: cs[0].timestamp,
++  open: cs[0].open,
++  high: Math.max(...cs.map((c) => c.high)),
++  low: Math.min(...cs.map((c) => c.low)),
++  close: cs[cs.length - 1].close,
++  volume: cs.reduce((a, c) => a + c.volume, 0),
++  closeTime: cs[cs.length - 1].closeTime,
++  quoteVolume: cs.reduce((a, c) => a + (c.quoteVolume || 0), 0),
++  trades: cs.reduce((a, c) => a + (c.trades || 0), 0),
++});
++for (const sym of ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']) {
++  const m15 = JSON.parse(fs.readFileSync(path.join(DIR, `${sym}-15m.json`), 'utf8'));
++  if (m15.length % 16 !== 0) throw new Error(sym + ' length not divisible by 16: ' + m15.length);
++  for (let i = 1; i < m15.length; i++) {
++    if (m15[i].timestamp - m15[i - 1].timestamp !== 900000) throw new Error(sym + ' gap at ' + i);
++  }
++  const h1 = [];
++  const h4 = [];
++  for (let i = 0; i < m15.length; i += 4) h1.push(agg(m15.slice(i, i + 4)));
++  for (let i = 0; i < m15.length; i += 16) h4.push(agg(m15.slice(i, i + 16)));
++  fs.writeFileSync(path.join(DIR, `${sym}-1h.json`), JSON.stringify(h1));
++  fs.writeFileSync(path.join(DIR, `${sym}-4h.json`), JSON.stringify(h4));
++  const ok =
++    h1.length === m15.length / 4 &&
++    h4.length === m15.length / 16 &&
++    h1[0].timestamp === m15[0].timestamp &&
++    h4[0].timestamp === m15[0].timestamp &&
++    h1[1].timestamp - h1[0].timestamp === 3600000 &&
++    h4[1].timestamp - h4[0].timestamp === 14400000 &&
++    h1[h1.length - 1].close === m15[m15.length - 1].close;
++  console.log(sym, '15m:', m15.length, '1h:', h1.length, '4h:', h4.length, ok ? 'ALIGNED-OK' : 'MISALIGNED!');
++}
+diff --git a/backtest/research-gates.mjs b/backtest/research-gates.mjs
+new file mode 100644
+index 0000000..c890488
+--- /dev/null
++++ b/backtest/research-gates.mjs
+@@ -0,0 +1,139 @@
++// Research gates: HTF confirmation (1H/4H), session hours, SELL-PB kill.
++// Uses opts.entryFilter (research-only hook). HTF series from resampled data;
++// mapping uses last CONFIRMED HTF bar only (no lookahead), na => block.
++import fs from 'node:fs';
++import path from 'node:path';
++import { runEngine, DEFAULT_PARAMS } from './engine.mjs';
++
++const DIR = path.join(import.meta.dirname, 'engine', 'data');
++const SYMS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
++const BASE = {};
++const TRIPLE = { swingLookback: 8, maxExtAtr: 2.0, breakoutBars: 7 };
++
++// Plain EMA with SMA seed (matches engine semantics).
++const ema = (xs, len) => {
++  const k = 2 / (len + 1);
++  const out = new Array(xs.length).fill(NaN);
++  let s = 0;
++  for (let i = 0; i < xs.length; i++) {
++    if (i < len - 1) { s += xs[i]; continue; }
++    if (i === len - 1) { s = (s + xs[i]) / len; out[i] = s; continue; }
++    s = xs[i] * k + s * (1 - k);
++    out[i] = s;
++  }
++  return out;
++};
++
++const load = (s, tf) => JSON.parse(fs.readFileSync(path.join(DIR, `${s}-${tf}.json`), 'utf8'));
++
++// Precompute per-symbol gate arrays aligned to 15m bars.
++const buildGates = (s) => {
++  const m15 = load(s, '15m');
++  const h1 = load(s, '1h');
++  const h4 = load(s, '4h');
++  const h1c = h1.map((c) => c.close);
++  const h4c = h4.map((c) => c.close);
++  const h1e21 = ema(h1c, 21);
++  const h1e50 = ema(h1c, 50);
++  const h4e50 = ema(h4c, 50);
++  // Wilder ATR(14) on 1H for the soft tolerance band.
++  const h1atr = (() => {
++    const tr = h1.map((c, i) => {
++      if (i === 0) return c.high - c.low;
++      const pc = h1[i - 1].close;
++      return Math.max(c.high - c.low, Math.abs(c.high - pc), Math.abs(c.low - pc));
++    });
++    const out = new Array(tr.length).fill(NaN);
++    let s = 0;
++    for (let i = 0; i < tr.length; i++) {
++      if (i < 13) { s += tr[i]; continue; }
++      if (i === 13) { s = (s + tr[i]) / 14; out[i] = s; continue; }
++      s = (s * 13 + tr[i]) / 14;
++      out[i] = s;
++    }
++    return out;
++  })();
++  const N = m15.length;
++  const allowL = { h1stack: new Array(N), h1ema: new Array(N), h4slope: new Array(N), h1h4: new Array(N), h4pos: new Array(N), h1slope: new Array(N), h1soft: new Array(N) };
++  const allowS = { h1stack: new Array(N), h1ema: new Array(N), h4slope: new Array(N), h1h4: new Array(N), h4pos: new Array(N), h1slope: new Array(N), h1soft: new Array(N) };
++  for (let i = 0; i < N; i++) {
++    const i1 = Math.floor(i / 4) - 1; // last confirmed 1H bar
++    const i4 = Math.floor(i / 16) - 1; // last confirmed 4H bar
++    let l1 = false;
++    let s1 = false;
++    let l4 = false;
++    let s4 = false;
++    if (i1 >= 50 && !Number.isNaN(h1e50[i1])) {
++      l1 = h1c[i1] > h1e50[i1];
++      s1 = h1c[i1] < h1e50[i1];
++    }
++    let l1e = false;
++    let s1e = false;
++    if (i1 >= 50 && !Number.isNaN(h1e21[i1]) && !Number.isNaN(h1e50[i1])) {
++      l1e = h1e21[i1] > h1e50[i1];
++      s1e = h1e21[i1] < h1e50[i1];
++    }
++    if (i4 >= 55 && !Number.isNaN(h4e50[i4]) && !Number.isNaN(h4e50[i4 - 5])) {
++      l4 = h4e50[i4] > h4e50[i4 - 5];
++      s4 = h4e50[i4] < h4e50[i4 - 5];
++    }
++    allowL.h1stack[i] = l1; allowS.h1stack[i] = s1;
++    allowL.h1ema[i] = l1e; allowS.h1ema[i] = s1e;
++    allowL.h4slope[i] = l4; allowS.h4slope[i] = s4;
++    allowL.h1h4[i] = l1 && l4; allowS.h1h4[i] = s1 && s4;
++    // Round 2: 4H position, 1H slope, 1H soft band.
++    allowL.h4pos[i] = i4 >= 50 && !Number.isNaN(h4e50[i4]) ? h4c[i4] > h4e50[i4] : false;
++    allowS.h4pos[i] = i4 >= 50 && !Number.isNaN(h4e50[i4]) ? h4c[i4] < h4e50[i4] : false;
++    allowL.h1slope[i] = i1 >= 55 && !Number.isNaN(h1e50[i1]) && !Number.isNaN(h1e50[i1 - 5]) ? h1e50[i1] > h1e50[i1 - 5] : false;
++    allowS.h1slope[i] = i1 >= 55 && !Number.isNaN(h1e50[i1]) && !Number.isNaN(h1e50[i1 - 5]) ? h1e50[i1] < h1e50[i1 - 5] : false;
++    if (i1 >= 50 && !Number.isNaN(h1e50[i1]) && !Number.isNaN(h1atr[i1])) {
++      allowL.h1soft[i] = !(h1c[i1] < h1e50[i1] - 0.25 * h1atr[i1]);
++      allowS.h1soft[i] = !(h1c[i1] > h1e50[i1] + 0.25 * h1atr[i1]);
++    } else { allowL.h1soft[i] = false; allowS.h1soft[i] = false; }
++  }
++  return { m15, allowL, allowS };
++};
++
++const EXPS = {
++  h1stack: (g) => (bar, side) => (side === 1 ? g.allowL.h1stack[bar] : g.allowS.h1stack[bar]),
++  h1ema: (g) => (bar, side) => (side === 1 ? g.allowL.h1ema[bar] : g.allowS.h1ema[bar]),
++  h4slope: (g) => (bar, side) => (side === 1 ? g.allowL.h4slope[bar] : g.allowS.h4slope[bar]),
++  h1h4: (g) => (bar, side) => (side === 1 ? g.allowL.h1h4[bar] : g.allowS.h1h4[bar]),
++  sess0820: (g) => (bar) => { const h = new Date(g.m15[bar].timestamp).getUTCHours(); return h >= 8 && h < 20; },
++  sess1220: (g) => (bar) => { const h = new Date(g.m15[bar].timestamp).getUTCHours(); return h >= 12 && h < 20; },
++  nosellpb: () => (bar, side, isPB) => !(side === -1 && isPB),
++  h4pos: (g) => (bar, side) => (side === 1 ? g.allowL.h4pos[bar] : g.allowS.h4pos[bar]),
++  h1slope: (g) => (bar, side) => (side === 1 ? g.allowL.h1slope[bar] : g.allowS.h1slope[bar]),
++  h1soft: (g) => (bar, side) => (side === 1 ? g.allowL.h1soft[bar] : g.allowS.h1soft[bar]),
++  'h1stack-pb': (g) => (bar, side, isPB) => (!isPB || (side === 1 ? g.allowL.h1stack[bar] : g.allowS.h1stack[bar])),
++};
++
++const summ = (trades) => {
++  const Rs = trades.map((t) => t.finalR);
++  const net = Rs.reduce((a, x) => a + x, 0);
++  const w = Rs.filter((r) => r > 0).length;
++  return { n: Rs.length, net, wr: Rs.length ? ((w / Rs.length) * 100).toFixed(0) : '-' };
++};
++
++const only = process.argv[2]; // optional: run one experiment
++for (const [expName, mkFilter] of Object.entries(EXPS)) {
++  if (only && only !== expName) continue;
++  for (const [cfgName, ov] of Object.entries({ base: BASE, triple: TRIPLE })) {
++    const parts = [];
++    let tot = 0;
++    for (const s of SYMS) {
++      const g = buildGates(s);
++      const base = runEngine(g.m15, { ...DEFAULT_PARAMS, ...ov });
++      const b = summ(base.trades);
++      const gated = runEngine(g.m15, { ...DEFAULT_PARAMS, ...ov }, { entryFilter: mkFilter(g) });
++      const v = summ(gated.trades);
++      const d = v.net - b.net;
++      tot += v.net;
++      const mid = g.m15[Math.floor(g.m15.length / 2)].timestamp;
++      const h1 = summ(gated.trades.filter((t) => t.exitTime < mid));
++      const h2 = summ(gated.trades.filter((t) => t.exitTime >= mid));
++      parts.push(`${s} ${v.n}t/${v.net >= 0 ? '+' : ''}${v.net.toFixed(2)}R(Δ${d >= 0 ? '+' : ''}${d.toFixed(2)}) H1:${h1.n}/${h1.net.toFixed(1)} H2:${h2.n}/${h2.net.toFixed(1)}`);
++    }
++    console.log(`T=${tot.toFixed(2)} :: ${expName} on ${cfgName} :: ${parts.join(' | ')}`);
++  }
++}
+diff --git a/docs/Changelog.md b/docs/Changelog.md
+index 03d7db4..bef99ea 100644
+--- a/docs/Changelog.md
++++ b/docs/Changelog.md
+@@ -2,11 +2,216 @@
+ 
+ All notable changes to CanvasV V4 FAST.
+ 
++## v4.3.6 — Fix v4.3.5 compile error + LuxAlgo-style panel polish
++
++Date: 2026-09-13
++
++- **FIX: v4.3.5 did not compile.** The `minChartTF` gate redeclared `tfSec`,
++  which already existed in the panel section (Pine forbids double declaration
++  in one scope). The gate variable is renamed to `tfChartSec` in both builds.
++  Caught on the branch before the master handoff — no action needed beyond
++  taking v4.3.6. (Reminder: `CanvasV-TV-Check.cmd` on Windows reports
++  COMPILES CLEAN or the exact Pine errors.)
++- **`compactSignals` (on by default, Visuals group)** — hides the four
++  ENTRY/SL/TP1/TP2 price tags; the BUY/SELL marker, level lines, TP/SL boxes,
++  and the panel ENTRY/SL/TP rows stay. About 5x more signal history fits in
++  the TradingView label limit. Both builds (FULL: signal + redrawn levels).
++- **`EQUITY` panel row** — live strategy equity vs initial capital (+x.xx%,
++  green/red). NORMAL 13→14 rows, DEBUG 17→18, Lite 11→12.
++- **`SYMBOL` panel row** — replaces TIMEFRAME, shows `BTCUSDT · 15M`.
++- **Low-TF hint** — on charts below `minChartTF` the SIGNAL row shows `LOW TF`
++  (orange) and DEBUG REASON shows `Below min timeframe`, so an empty 1m/5m
++  chart explains itself. No trading change: entries, gates, and exits are
++  untouched, R baselines unchanged (BTC 48t / +8.06R · ETH 46t / +7.33R ·
++  SOL 38t / +6.58R).
++
++## v4.3.5 — Minimum chart-TF gate, risk default 1%
++
++Date: 2026-09-13
++
++- **`minChartTF` gate (default `"15"`, Execution group)** — no new signals print
++  on charts below this timeframe, so 1m/5m charts stay signal-free. The gate is
++  ANDed into `entryUp`/`entryDn`, which covers strategy entries, BUY/SELL labels,
++  and BUY/SELL alertconditions in one place; blocked candidates log
++  `LOW TIMEFRAME` in diagnostics (same pattern as `OUTSIDE SESSION`). Exotic
++  chart types (Renko/Range/...) fail open (status quo). Set to `1S` to allow all
++  timeframes. Both Pine builds; the Node engine models 15m data only, so the gate
++  is a no-op there and R baselines are unchanged (BTC 48t / +8.06R · ETH 46t /
++  +7.33R · SOL 38t / +6.58R).
++- **Risk default 0.5% → 1.0%** (`Risk per trade (%)`, both builds + engine +
++  README). Evidence: `backtest/engine/output/V4-HTF-SESSION-MM-v45.md` — 1%
++  compounds to +24.1% / 4.1% max DD over 6 months on the 3-symbol portfolio.
++  R-multiples are size-independent, so trade lists are unaffected.
++
++## v4.3.4 — Clean-chart mode, TP1 approach alert, position size (no trading change)
++
++Date: 2026-09-12
++
++**Display/alert-only release — entries, gates, and exits are byte-identical to
++v4.3.3, so production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
++SOL 38t / +6.58R.** Both Pine builds; the Node engine is untouched.
++
++- **`cleanChart` mode (off by default)** — one switch hides the panel, BUY/SELL
++  markers, and signal info labels for clean screenshots/sharing. Level lines,
++  TP/SL boxes, and trend bars stay on the chart.
++- **TP1 approach alert (opt-in)** — a `CanvasV V4 TP1 80%` alertcondition fires
++  when the open position crosses 80% of the way to TP1 (R-based, realtime only).
++- **Position size in the POS row** — e.g. `LONG · 0.0512 · 5b · +0.4R · 40%`, so
++  fixed-risk sizing is visible at a glance (NORMAL, DEBUG, and Lite panels).
++
++
++## v4.3.3 — Live excursion row, P&L position colors, signal age (no trading change)
++
++Date: 2026-09-12
++
++**Display-only release — entries, gates, and exits are byte-identical to v4.3.2, so
++production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
++SOL 38t / +6.58R.** Both Pine builds; the Node engine is untouched.
++
++- **Live MFE/MAE panel row** — the open position's best and worst excursion in R
++  (`MFE +0.8R · MAE -0.3R`), updating every bar; `--` when flat. Added to the
++  NORMAL (13-row), DEBUG (17-row), and Lite (11-row) panels.
++- **Position colored by live P&L** — the POSITION/POS value is now green/red by
++  unrealized R instead of by direction (direction stays in the text); silver
++  when flat.
++- **Signal age** — the SIGNAL row shows bars elapsed since the last signal
++  (e.g. `BUY · 5b`).
++
++
++## v4.3.2 — TP progress, session shading, richer alerts (no trading change)
++
++Date: 2026-09-12
++
++**Display-only release — entries, gates, and exits are byte-identical to v4.3.1, so
++production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
++SOL 38t / +6.58R.** Both Pine builds; the Node engine is untouched.
++
++- **Live TP1 progress in the POS row** — the open position now shows how far it has
++  travelled toward TP1 as a percentage of the `tp1R` target (R-based, so it stays
++  correct if `tp1R` is retuned), e.g. `LONG · 5b · +0.4R · 40%`.
++- **In-session chart shading** — when the session filter is enabled, in-session
++  bars get a subtle blue background so off-hours price action is visible at a glance.
++- **Richer alert-dialog messages** — the BUY/SELL/EXIT `alertcondition` messages now
++  include `{{exchange}}:{{ticker}}`, `{{interval}}`, and `@ {{close}}` placeholders.
++
++
++## v4.3.1 — Supersede accounting fix + LuxAlgo visual pack (no trading change)
++
++Date: 2026-09-12
++
++**Presentation/statistics release — entries, gates, and exits are byte-identical to
++v4.3.0, so production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
++SOL 38t / +6.58R.** Both Pine builds (`CanvasV_V4_FAST.pine`, `..._lite.pine`);
++the Node engine is untouched (it mirrors only the signal path).
++
++Bug fixes:
++
++- **Superseded trades were double-counted.** A reversal entry was detected via the
++  stale `stratDir` variable instead of the live `strategy.position_size`, so a
++  market-closed trade awaiting close detection also counted as "superseded"; the
++  superseded trade's R never reached W/L or the panel, and its later
++  `closedtrades` registration was then classified a *second* time against the NEW
++  trade's levels. Reversals now key off the actual position, the superseded R is
++  recorded immediately (W/L + net R + decisions log + `V4OUT|`), and the later
++  close registration is skipped via a one-shot flag. Latent in practice (0
++  supersedes in 180 days × 3 symbols) but wrong on principle — fixed.
++- **Post-SL observations could overlap** (full build): an `SL FIRST` exit landing
++  mid-window overwrote the in-flight observation. New windows now wait for the
++  running one to finish.
++
++LuxAlgo-style visuals (all toggleable, display-only, both builds):
++
++- **TP/SL zone boxes** — translucent profit (green, entry → TP1) and risk (red,
++  entry → SL) boxes extending right with the level lines; TP2 stays a dotted
++  runner line.
++- **Signal info labels** — `BUY · PULLBACK RESUME / SL 3.2A · TP +1R` at each entry
++  (`showSigLabels`, on by default).
++- **PERF panel row** — session net R, win %, and R-based profit factor from closed
++  trades (`stNetR` / `stGrossW` / `stGrossL` now accumulate on every close).
++- **Trend bars** — candles colored by regime trend (`colorBars`, on by default).
++- **`CanvasV V4 EXIT` alertcondition** — fires whenever a position closes.
++- Strategy titles updated to V4.3 (were stale V4.2).
++
++
+ > **Repository note:** this checkout ships only the V4 line (`TradingView/CanvasV_V4_FAST*.pine`).
+ > The V3 MTF indicator file (`TradingView/MyBuySellIndicator.pine`) and the `16d6e9e` /
+ > `v3.4.4-legacy` baseline referenced below are not present in this repository's history —
+ > the V3 entries are kept as design history only.
+ 
++## v4.3.0 — Exit-model release: full exit at TP1 + exact limit-fill accounting
++
++Date: 2026-09-12
++
++**Behavior change (exits only — entries untouched).** Two findings from the exit-policy
++shootout (6 policies × 3 symbols, identical v4.2.1 entries, full window + 90/90 halves):
++
++1. **Live Pine underperformed the engine.** The engine exits 100% at TP1, but Pine's
++   default single exit rode to TP2 (`limit = stratTP2`) — a ~2.8R total gap (Pine-faithful
++   +19.17R vs full-at-TP1 +21.98R). Runners systematically give the profit back: 50/50
++   partials (+20.55R plain, +20.10R with break-even) both lose to banking TP1 in full.
++   The MFE ladder explains why: only 28–38% of trades ever reach +1R, 7–10% reach +1.5R,
++   ~0% reach +2R. Closer TPs (full/partial at 0.75R) help ETH/SOL but hurt BTC — rejected
++   as symbol-dependent.
++2. **Engine TP credit was noisy.** TP exits credited the bar's close (±0.25R avg noise
++   per TP trade) instead of the limit price TradingView actually fills at. Validation: an
++   independent harness replicated the engine trade-for-trade (**132/132 exit reasons
++   identical**); only TP R differed.
++
++Changed:
++
++- Pine (full + Lite): default single exit is now 100% at TP1 (`limit = stratTP1`, exit
++  IDs `L-TP1`/`S-TP1`). Partial-TP mode (50/50 + optional break-even) is preserved as an
++  opt-in; the TP2 line remains for partial mode and as a visual runner target.
++- Engine: TP1/TP2 exits credit exactly `tp1R`/`tp2R`. Same trades, same reasons — honest
++  fills only. Engine↔Pine default parity restored (both full-at-TP1).
++- `VERSION` → `v4.3.0` / `v4.3.0-lite`.
++
++New baselines (full window): **BTC 48t / +8.06R · ETH 46t / +7.33R · SOL 38t / +6.58R**
++(total +21.98R). All 6 halves positive (BTC +6.49/+1.57, ETH +3.25/+4.09, SOL +6.10/+0.49).
++Note BTC's baseline *fell* (+9.84 → +8.06): its TP1 bars close strong, so close-based
++credit was overstating — the new figure is the honest one.
++
++Not changed (deliberately): entries and all gates. SOL-long forensics (18 longs, 9W/9L)
++found no entry-bar feature separating winners from losers (extension/body/close-location/
++volume/risk all ~identical), so no new entry filter was added. SOL longs remain −1.38R —
++still the open signal-side question.
++
++## v4.2.1 — Stop-structure study: ATR stop buffer 1.5 → 1.25
++
++Date: 2026-09-12
++
++**Tuning release — one default changed.** Diagnosis: production stops averaged **~3.5 ATR**
++wide (10-bar swing + 0.5 buffer + 1.5 stop buffer), so TP1 (1.0R ≈ 3.5 ATR of travel) was a
++stretch and TP2 (2.5R) never hit on any symbol; 44–66% of trades chopped sideways into
++STALE/EXPIRED exits, and SL failures were 60–90% LATE_ENTRY (entries that never moved),
++not tight stops.
++
++Two one-change-at-a-time sweeps (19 + 17 variants × 3 symbols, full window + 90/90 halves)
++plus a 60/60/60 thirds validation found the robust plateau at `atrStopMult` 1.0–1.25.
++**1.25 selected** because it is the only value that improves-or-holds every symbol
++full-window (1.0 degrades SOL −35%):
++
++| atrStopMult | BTC NetR | ETH NetR | SOL NetR | Total |
++|---|---|---|---|---|
++| 1.5 (v4.2.0) | +6.43 (36t) | +4.75 (39t) | +3.96 (29t) | +15.14 |
++| **1.25 (v4.2.1)** | **+9.84 (48t)** | **+4.70 (46t)** | **+5.28 (38t)** | **+19.82 (+31%)** |
++| 1.0 | +11.97 (54t) | +5.88 (53t) | +2.57 (47t) | +20.41 |
++
++Validation: 5/6 halves positive (only SOL second-90 −0.37R); thirds BTC 3/3 positive,
++SOL 2/3 improved + 1 flat, ETH full-window flat. Below 0.75 the edge collapses (SOL/ETH
++first-third deeply negative); above 1.5 was never tested because 1.5 is the old default.
++Rejected alternatives from the same sweeps: removing the breakout-quality trio (helps BTC
++only, hurts SOL), removing the volume filter (full-window better but second halves
++−4R — unstable), closer TPs under tight stops (cuts winners short), `maxRiskAtr` 3.0 cap
++(kills the profitable wide-stop trades), shorter expiry (destroys results — winners need
++time), mid-trade break-even (halves NetR).
++
++- Changed: `atrStopMult` default 1.5 → 1.25 in `CanvasV_V4_FAST.pine`, the Lite build, and
++  `backtest/engine.mjs` (all three stay in exact default parity).
++- `VERSION` bumped to `v4.2.1` / `v4.2.1-lite`; baselines updated in README / Testing.
++- Caveat: all validation is in-sample (Binance API unreachable from the test environment,
++  so no fresh-data hold-out was possible). Re-validate on new data when available.
++
+ ## v4.2.0 — V4 FAST: `strategy()` conversion + research stack (sizing, quality, volume, HV)
+ 
+ Date: 2026-09-12 (entry written retrospectively — documents the v4.2.0 code as shipped)
+diff --git a/docs/GoLive.md b/docs/GoLive.md
+new file mode 100644
+index 0000000..865e588
+--- /dev/null
++++ b/docs/GoLive.md
+@@ -0,0 +1,99 @@
++# چک‌لیست اجرای زنده CanvasV V4 (نسخه v4.3.6)
++
++این فایل ران‌بوک شخصی مالک استراتژی است: از انتقال به مستر تا پایش هفتگی.
++اعداد مرجع از بک‌تست ۶ ماهه (۱۵ دقیقه، بایننس): BTC 48t/+8.06R/58%‎ · ETH 46t/+7.33R‎ · SOL 38t/+6.58R‎ ·
++مجموع 21.97R در ۱۳۲ معامله · میانگین ‎+0.168R در هر معامله · فرکانس ‎~۲ معامله در هفته برای هر سیمبل.
++
++## اصول غیرقابل‌مذاکره
++
++1. فقط چارت **۱۵ دقیقه** (گیت `minChartTF` به‌صورت پیش‌فرض ۱m/5m را بلاک می‌کند).
++2. ریسک **۱٪** در هر معامله، هر ۳ سیمبل با هم (BTC+ETH+SOL).
++3. تا قبل از **۳۰ معامله زنده** هیچ پارامتری را دست نزن.
++
++## گام ۰ — انتقال به مستر (GitHub Desktop)
++
++از برنچ `arena/01a09664-canvasvtradingindicator` این ۲۱ فایل را به `master` منتقل کن
++(۲۰ فایل زیر + همین فایل). هیچ فایل دیگری با مستر فرق ندارد:
++
++- `.gitignore` · `README.md` · `docs/Changelog.md` · `docs/Strategy.md` · `docs/Testing.md`
++- `TradingView/CanvasV_V4_FAST.pine` · `TradingView/CanvasV_V4_FAST_lite.pine`
++- `backtest/engine.mjs` · `backtest/resample-htf.mjs` · `backtest/forensics-btc100.mjs`
++- `backtest/research-gates.mjs` · `backtest/mm-ladder.mjs`
++- `backtest/engine/data/*-{1h,4h}.json` (۶ فایل)
++- `backtest/engine/output/V4-SIGNAL-UPGRADE-v44.md` · `backtest/engine/output/V4-HTF-SESSION-MM-v45.md`
++- `docs/GoLive.md` (همین فایل)
++
++## گام ۱ — کامپایل‌چک روی تریدینگ‌ویو (ویندوز)
++
++1. `CanvasV-TV-Check.cmd` را اجرا کن → باید `COMPILES CLEAN` بدهد.
++2. اگر خطا داد، متن خطا را برای من بفرست (دست نزن، اول بگو).
++
++## گام ۲ — نصب روی ۳ چارت
++
++برای هر کدام از `BINANCE:BTCUSDT` ،`BINANCE:ETHUSDT` ،`BINANCE:SOLUSDT` یک چارت **۱۵ دقیقه**
++باز کن و استراتژی `CanvasV V4.3 FAST Strategy` (فایل کامل، v4.3.6) را اضافه کن.
++ورودی‌های کلیدی را چک کن (باید همین‌ها باشند):
++
++| ورودی | مقدار | گروه |
++|---|---|---|
++| Minimum chart TF for signals | `15` | Execution |
++| Risk per trade (%) | `1.0` | Position Sizing |
++| Enable fixed-risk position sizing | ✅ true | Position Sizing |
++| Enable Session Filter | ❌ false | Execution |
++| Compact signals | ✅ true | Visuals |
++| Show panel | ✅ true | Visuals |
++
++پنل باید `v4.3.6` را نشان بدهد و ردیف SYMBOL باید `BTCUSDT · 15M` باشد.
++(نسخه Lite فقط برای مواقعی است که ادیتور پاین کند/سنگین شد.)
++
++## گام ۳ — آلرت‌ها
++
++برای **هر سیمبل** حداقل این ۲ آلرت (راست‌کلیک روی چارت → Add alert):
++
++1. شرط `CanvasV V4.3` → **BUY** ← Once Per Bar Close
++2. شرط `CanvasV V4.3` → **SELL** ← Once Per Bar Close
++
++اختیاری (اگر سقف آلرت پلنت اجازه داد): `EXIT` و `TP1 80%`.
++نکته‌ها: استراتژی فقط روی **بسته‌شدن کندل** محاسبه می‌کند، پس آلرت وسط کندل نمی‌پرد؛
++متن آلرت خودش تیکر/اینترول/قیمت را دارد. تاریخ انقضای آلرت‌های تریدینگ‌ویو را هر از گاهی تمدید کن.
++
++## گام ۴ — شروع محتاطانه (۲ تا ۴ هفته اول)
++
++- هفته ۱–۲: فقط **پیپر** (سیگنال‌ها را روی کاغذ/اکسل اجرا کن) یا سایز خیلی کوچک.
++- هدف این دوره: مطمئن شدن از اینکه آلرت می‌رسد، ورود/خروج‌ها با پنل می‌خوانند، و بروکر/صرافی اسلیپیج عجیب ندارد.
++- بعد از ۲ هفته تمیز: سایز کامل ۱٪.
++
++## پایش هفتگی (جمعه‌ها، ۱۵ دقیقه)
++
++| سؤال | مقدار موردانتظار | اگر نبود |
++|---|---|---|
++| تعداد معامله هفته (۳ سیمبل) | ‎~۴ تا ۸ | کمتر از ۲ هفته‌های پیاپی: چک کن استراتژی روی چارت فعال است و تایم ۱۵m است |
++| اسلیپیج ورود (فیل واقعی − کلوز سیگنال) | چند صدم درصد | اگر مداوم بزرگ است، قبل از ادامه با من در میان بگذار |
++| دراودان شناور پورتفو | زیر ‎~۶٪ | بالای ۸٪ → بخش «توقف» |
++| سیگنال چاپ‌شده ولی آلرت‌نرسیده | صفر | آلرت را دوباره بساز (گام ۳) |
++
++## ژورنال هر معامله (حداقل این ۶ ستون)
++
++تاریخ/ساعت · سیمبل · جهت · قیمت سیگنال (کلوز) · قیمت فیل واقعی · نتیجه (R واقعی).
++اختیاری حرفه‌ای: ورودی‌های `V4LOG`/`V4OUT` را به یک وب‌هوک/شیت وصل کن تا لاگ خودکار شود
++(پیش‌فرض خاموش‌اند؛ فقط لاگ‌اند و روی معامله اثر ندارند).
++
++## معیارهای توقف و بازبینی (هر کدام رخ داد: Pause، بعد با من صحبت کن)
++
++- دراودان پورتفو از **۸٪** گذشت (حدود ۲ برابر بدترین بک‌تست: ۴٫۱٪).
++- بعد از **۹۰ روز و حداقل ۴۰ معامله**، برایند R صفر یا منفی شد.
++- **۳ ماه منفی پشت سر هم** (بک‌تست: همه ۶ ماه سبز بود).
++- رفتار غیرمنتظره تکنیکال: سیگنال روی ۱m/5m چاپ شد، پنل VERSION قدیمی نشان داد، یا آلرت‌ها پشت سر هم از دست رفتند.
++
++## کارهای ممنوعه ماه اول
++
++- تغییر پارامتر بعد از چند ضرر («فقط این یک فیلتر را اضافه کنم» = اورفیتینگ).
++- اجرای دیسکرشنی خلاف سیگنال؛ اگر جایی دخالت کردی، آن معامله را در ژورنال جدا علامت بزن.
++- بالا بردن ریسک چون «چند برد پشت سر هم» آمده (۱٪ همان ۱٪).
++- اضافه کردن سیمبل چهارم قبل از ۳۰ معامله زنده.
++
++## بعد از ۳۰ تا ۵۰ معامله زنده
++
++این ۴ عدد را با بک‌تست مقایسه کن: وین‌ریت (انتظار ‎~۵۵–۵۸٪)، میانگین R (‎~+0.17)،
++PF (‎~۱٫۶–۱٫۷)، دراودان (زیر ‎~۶٪). اگر همه در همین حدود بودند → سیستم سالم است و همان را ادامه بده.
++اگر نه → ژورنال را می‌آوریم و تحقیق ترک ۳ (خروج‌ها/هزینه‌ها) را با دیتای واقعی شروع می‌کنیم.
+diff --git a/docs/Strategy.md b/docs/Strategy.md
+index ea91cae..7c237e8 100644
+--- a/docs/Strategy.md
++++ b/docs/Strategy.md
+@@ -1,6 +1,6 @@
+ # Strategy — CanvasV V4 FAST
+ 
+-This document describes the **current baseline** (TradingView `v4.2.0`, Pine `strategy()`) signal logic precisely. It documents *what the code does*, not a proposal.
++This document describes the **current baseline** (TradingView `v4.3.4`, Pine `strategy()`) signal logic precisely. It documents *what the code does*, not a proposal.
+ 
+ Pine source: [`TradingView/CanvasV_V4_FAST.pine`](../TradingView/CanvasV_V4_FAST.pine).
+ Lite build: [`TradingView/CanvasV_V4_FAST_lite.pine`](../TradingView/CanvasV_V4_FAST_lite.pine) — signal-identical, diagnostics trimmed (see §13).
+@@ -117,11 +117,11 @@ When `highVol` is true (ATR ≥ 130% of its 100-bar average):
+ 
+ ## 9. Risk model
+ 
+-Inputs: `swingLookback = 10`, `structBufferAtr = 0.5`, `minRiskAtr = 0.5`, `maxRiskAtr = 4.0`, `tp1R = 1.0`, `tp2R = 2.5`, `atrFallbackMult = 1.5` (fixed), `atrStopMult = 1.5`.
++Inputs: `swingLookback = 10`, `structBufferAtr = 0.5`, `minRiskAtr = 0.5`, `maxRiskAtr = 4.0`, `tp1R = 1.0`, `tp2R = 2.5`, `atrFallbackMult = 1.5` (fixed), `atrStopMult = 1.25` (v4.2.1; was 1.5).
+ 
+ - **Entry** = signal candle close.
+ - **Structural SL** = `lowest(low, 10)[1] − 0.5·ATR` (long) / `highest(high, 10)[1] + 0.5·ATR` (short). The `[1]` excludes the signal bar.
+-- **Volatility buffer:** SL is pushed a further `atrStopMult × ATR` (1.5) beyond structure.
++- **Volatility buffer:** SL is pushed a further `atrStopMult × ATR` (1.25) beyond structure.
+ - **Fallback:** structural risk < 0.5 ATR (or invalid) → fixed `1.5·ATR` stop. Never blocks the signal.
+ - **Hard risk gate:** risk > 4.0 ATR → setup **rejected** (`RISK TOO WIDE` / `INVALID STRUCTURE`). SL must also be on the correct side of entry with usable ATR.
+ - **Targets:** TP1 = Entry ± 1.0R, TP2 = Entry ± 2.5R — multiples of actual risk, never of ATR.
+@@ -142,12 +142,13 @@ Entries go through `strategy.entry("Long"/"Short")` with a one-shot bar guard; a
+ 
+ | Exit | Default | Rule |
+ |---|---|---|
++| Single TP (100% at TP1) | **on** | default since v4.3.0 — runners systematically give the profit back |
+ | Partial TP (50% TP1 / 50% TP2) | off | `enablePartialTP` |
+ | Break-even after TP1 fill | off | `enableMoveBE` (needs partial TP) |
+ | Mid-trade break-even | off | `enableMidTradeBE`: after 10 bars, profit ≥ +0.25R → SL to entry |
+ | **Stale-trade exit** | **on** | After 15 bars, position within −0.25R…+0.25R → close at market |
+ | **Time expiry** | **on** | After 20 bars → close at market |
+-| Session filter | off | `0800-1700:23456` (Mon–Fri) when enabled |
++| Session filter | off | `0800-1700:23456` (Mon–Fri) when enabled, plus in-session chart shading |
+ 
+ The stale exit and expiry have no off switch — they always apply.
+ 
+@@ -155,17 +156,17 @@ The stale exit and expiry have no off switch — they always apply.
+ 
+ ## 12. Outcomes, MFE/MAE, diagnostics
+ 
+-- **Outcomes:** `TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`, classified from the exit price vs the tracked levels. Counters feed the DEBUG panel and decisions log.
++- **Outcomes:** `TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`, classified from the exit price vs the tracked levels. Reversals key off the live position (not `stratDir`); superseded R is recorded immediately (W/L + net R + log + `V4OUT|`) and its later close registration skipped via a one-shot flag. Counters feed the DEBUG panel and decisions log.
+ - **MFE/MAE** tracked in R for the open position; per-trade R recorded at close.
+-- **Post-SL observation** (default 10 bars): after an `SL FIRST` exit, tracks max favorable excursion in R — *"did price move our way after the stop?"* Reported in the decisions log, a DEBUG label, and a `V4POST|` alert.
+-- **Alerts (all off by default):** entry alerts; diagnostic `V4LOG|` (signal/rejection with `T=` bar time), `V4OUT|` (resolution: outcome, bars, MFE/MAE, R, entry); `alertcondition("CanvasV V4 BUY"/"SELL")` for TradingView alert dialogs.
+-- **Visuals:** `NORMAL` mode = regime-colored EMA 21 trend line, ▲/▼ markers, Entry/SL/TP lines, compact 11-row panel. `DEBUG` adds the raw EMA set, a 15-row research panel (regime/setup/reason/RISK-RR/position/outcomes/W-L), the 12-line decisions log, and per-signal record labels. Signal logic is identical in both modes.
++- **Post-SL observation** (default 10 bars): after an `SL FIRST` exit, tracks max favorable excursion in R — *"did price move our way after the stop?"* Reported in the decisions log, a DEBUG label, and a `V4POST|` alert. New windows wait while one is running (no overlap).
++- **Alerts (all off by default):** entry alerts; diagnostic `V4LOG|` (signal/rejection with `T=` bar time), `V4OUT|` (resolution: outcome, bars, MFE/MAE, R, entry); `alertcondition("CanvasV V4 BUY"/"SELL"/"EXIT"/"TP1-80%")` for TradingView alert dialogs (messages include ticker/interval/price placeholders; TP1-80% is opt-in and fires at 80% of the way to TP1).
++- **Visuals:** `NORMAL` mode = trend-colored bars, regime-colored EMA 21 trend line, ▲/▼ markers, Entry/SL/TP lines, TP/SL zone boxes (profit green / risk red), signal info labels (`SL 3.2A · TP +1R`), compact 13-row panel with a PERF row (net R · win % · R-based PF) and a live MFE/MAE row; the POS row shows live TP1 progress % and is colored by unrealized P&L; SIGNAL shows bars since the signal; `cleanChart` mode hides panel/markers/labels for screenshots; POS shows position size. `DEBUG` adds the raw EMA set, a 17-row research panel (regime/setup/reason/RISK-RR/position/outcomes/W-L/PERF/MFE-MAE), the 12-line decisions log, and per-signal record labels. Signal logic is identical in both modes.
+ 
+ ---
+ 
+ ## 13. Lite build
+ 
+-`TradingView/CanvasV_V4_FAST_lite.pine` (`v4.2.0-lite`) trims **diagnostics only**: no `visualMode`/`DEBUG` mode, no decisions log, no `V4LOG`/`V4OUT`/`V4POST` alerts, no post-SL window. Verified signal-identical to the full build:
++`TradingView/CanvasV_V4_FAST_lite.pine` (`v4.3.4-lite`) trims **diagnostics only**: no `visualMode`/`DEBUG` mode, no decisions log, no `V4LOG`/`V4OUT`/`V4POST` alerts, no post-SL window. Verified signal-identical to the full build:
+ 
+ - `node scripts/check-pine-parity.mjs` — 95 identifiers + 50 inputs match.
+ - `backtest/engine/output/V4-LITE-HOLDOUT90.md` — zero divergences across 3 symbols × 3 windows.
+@@ -174,7 +175,7 @@ The stale exit and expiry have no off switch — they always apply.
+ 
+ ## 14. Local engine parity
+ 
+-`backtest/engine.mjs` reproduces the Pine v4.2.0 signal logic: every `DEFAULT_PARAMS` value equals its Pine input default (verified by direct extraction; no engine-only keys). Indicator math matches Pine `ta.*` semantics (EMA seed = SMA, Wilder RMA for ATR, `[1]`-shifted rolling extremes, NaN-safe warmup).
++`backtest/engine.mjs` reproduces the Pine v4.3.x signal logic: every `DEFAULT_PARAMS` value equals its Pine input default (verified by direct extraction; no engine-only keys). Indicator math matches Pine `ta.*` semantics (EMA seed = SMA, Wilder RMA for ATR, `[1]`-shifted rolling extremes, NaN-safe warmup). TP1/TP2 exits credit exact limit R (v4.3.0), matching TradingView limit fills.
+ 
+ Deliberate differences (documented in the engine header):
+ 
+diff --git a/docs/Testing.md b/docs/Testing.md
+index 3ccd4cc..ebf948d 100644
+--- a/docs/Testing.md
++++ b/docs/Testing.md
+@@ -1,6 +1,6 @@
+ # Testing — CanvasV V4 FAST
+ 
+-How to verify the strategy in TradingView and locally. Current baseline: **v4.2.0**.
++How to verify the strategy in TradingView and locally. Current baseline: **v4.3.4** (behavior identical to v4.3.0).
+ 
+ ---
+ 
+@@ -57,7 +57,7 @@ node scripts/check-pine-structure.mjs TradingView/CanvasV_V4_FAST_lite.pine
+ node scripts/check-pine-parity.mjs           # full-vs-lite signal parity
+ ```
+ 
+-Expected production baselines (full window, CUR defaults): **BTC 36t / +6.43R · ETH 39t / +4.75R · SOL 29t / +3.96R**. Small differences after data refresh are normal; large ones mean a logic or data change — investigate before trusting results.
++Expected production baselines (full window, v4.3.4 defaults — behavior identical to v4.3.0): **BTC 48t / +8.06R · ETH 46t / +7.33R · SOL 38t / +6.58R**. Small differences after data refresh are normal; large ones mean a logic or data change — investigate before trusting results.
+ 
+ Other harnesses:
+ 
