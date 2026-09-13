@@ -25,7 +25,7 @@ Single timeframe only: everything runs on the chart series. No `request.security
 
 ---
 
-## TradingView version (v4.3.0)
+## TradingView version (v4.3.4)
 
 - **Pipeline:** `REGIME → DIRECTION → SETUP → TRIGGER → RISK → STRATEGY`. A candidate must pass every stage; entries fire only on **confirmed closed candles** (`barstate.isconfirmed`).
 - **Regime:** EMA 50 slope over 10 bars, normalized to ATR/bar; trending when |slope| ≥ 0.05. Trend direction needs the EMA 21/50 stack *and* a rising/falling EMA 50. High-volatility flag when ATR ≥ 130% of its 100-bar average.
@@ -37,18 +37,18 @@ Single timeframe only: everything runs on the chart series. No `request.security
 - **Volume (Phase 4):** relative volume vs 20-bar average — ≥ 1.20 for breakouts, ≥ 1.10 for pullbacks.
 - **High volatility (Phase 5):** `Stronger Confirmation` by default — entries during high-vol regimes need relVol ≥ 1.40 and close location ≥ 0.75 / ≤ 0.25. Alternatives: `Allow`, `Block`, `Reduce Risk`.
 - **Risk model:** Entry = signal close. Structural SL = 10-bar swing (signal bar excluded via `[1]`) ∓ 0.5 ATR, then a further `atrStopMult` (1.25) × ATR buffer. Too-tight structure (< 0.5 ATR) falls back to a 1.5 ATR stop; risk > 4.0 ATR **rejects the setup**. TP1 = 1.0R, TP2 = 2.5R.
-- **Position sizing (Phase 2):** fixed-risk 0.5% of equity per trade (on by default), optional max-size cap.
-- **Execution (Phase 3):** full exit at TP1 by default (v4.3.0 — runners give the profit back); optional 50/50 partial TP at TP1/TP2, break-even after TP1 fill, mid-trade break-even (+0.25R after 10 bars) — all off by default. **Always on:** stale-trade exit (flat ±0.25R after 15 bars → market) and time expiry (20 bars).
+- **Position sizing (Phase 2):** fixed-risk 1.0% of equity per trade (on by default), optional max-size cap.
+- **Execution (Phase 3):** full exit at TP1 by default (since v4.3.0 — runners give the profit back); optional 50/50 partial TP at TP1/TP2, break-even after TP1 fill, mid-trade break-even (+0.25R after 10 bars) — all off by default. **Always on:** stale-trade exit (flat ±0.25R after 15 bars → market) and time expiry (20 bars).
 - **Costs modeled:** $10k capital, 0.04% commission, 1-tick slippage.
-- **Visual modes:** `NORMAL` = clean chart (regime-colored trend line, ▲/▼ markers, 11-row panel); `DEBUG` = full EMA set, 15-row research panel, decisions log, per-signal record labels. Signal logic is identical in both.
-- **Diagnostics:** outcome tracking (`TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`), MFE/MAE in R, a 10-bar post-SL observation window, and optional `V4LOG` / `V4OUT` / `V4POST` machine-readable alerts (all off by default). Session filter available, off by default.
-- **Lite build:** `CanvasV_V4_FAST_lite.pine` is signal-identical (95 identifiers + 50 inputs verified equal; zero divergences on the 90/90 hold-out) with diagnostics-only trims for faster compile. Use it when the full script hits TradingView compile limits.
+- **Visual modes:** `NORMAL` = clean chart (trend-colored bars, regime-colored trend line, ▲/▼ markers, Entry/SL/TP lines, TP/SL zone boxes, signal info labels (compact mode hides the price tags), 14-row panel with SYMBOL, PERF, live MFE/MAE and EQUITY rows); `DEBUG` = full EMA set, 18-row research panel, decisions log, per-signal record labels; `cleanChart` one-switch mode hides panel/markers/labels for screenshots. Signal logic is identical in both.
+- **Diagnostics:** outcome tracking (`TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`), MFE/MAE in R, a 10-bar post-SL observation window, and optional `V4LOG` / `V4OUT` / `V4POST` machine-readable alerts (all off by default). A `CanvasV V4 EXIT` alertcondition fires on any close; an optional TP1-80% approach alert warns before the target. Session filter available, off by default (in-session chart shading when on). Alert dialogs include ticker/interval/price placeholders.
+- **Lite build:** `CanvasV_V4_FAST_lite.pine` (v4.3.4-lite) is signal-identical (95 identifiers + 50 inputs verified equal; zero divergences on the 90/90 hold-out) with diagnostics-only trims for faster compile. Use it when the full script hits TradingView compile limits.
 
 ---
 
 ## Local backtest engine
 
-`backtest/engine.mjs` is a dependency-free Node.js mirror of the Pine v4.3.0 signal logic — every default parameter matches the Pine input defaults exactly. It adds `AMBIGUOUS` (SL+TP hit on the same bar) and `STALE_EXIT` outcomes, which the Pine strategy can only classify by exit price. It does **not** model the default-off Pine extras (partial TP, break-even-after-TP1, session filter, commission/slippage).
+`backtest/engine.mjs` is a dependency-free Node.js mirror of the Pine v4.3.x signal logic — every default parameter matches the Pine input defaults exactly. It adds `AMBIGUOUS` (SL+TP hit on the same bar) and `STALE_EXIT` outcomes, which the Pine strategy can only classify by exit price. It does **not** model the default-off Pine extras (partial TP, break-even-after-TP1, session filter, commission/slippage) or the `minChartTF` gate (the engine only runs 15m data, where the gate always passes).
 
 ```bash
 cd backtest
@@ -64,7 +64,7 @@ Windows shortcuts: `CanvasV-Test.cmd` (quick-test menu), `CanvasV-Web.cmd` (dash
 
 Research scripts (ablation, forensics, hold-outs, sweep) live in [`backtest/`](backtest/) with their reports in [`backtest/engine/output/`](backtest/engine/output/). Data: 15m Binance OHLCV, ~180 days per symbol, in [`backtest/engine/data/`](backtest/engine/data/).
 
-**Current production baselines** (v4.3.0 defaults, full window): BTC 48 trades / +8.06R · ETH 46 trades / +7.33R · SOL 38 trades / +6.58R. See `V4-LITE-HOLDOUT90.md` and `V4-SIGNAL-QUALITY-LATENCY-AUDIT.md` (v4.2.x-era reports; re-run to refresh).
+**Current production baselines** (v4.3.4 defaults — entries/exits unchanged since v4.3.0 — full window): BTC 48 trades / +8.06R · ETH 46 trades / +7.33R · SOL 38 trades / +6.58R. See `V4-LITE-HOLDOUT90.md` and `V4-SIGNAL-QUALITY-LATENCY-AUDIT.md` (v4.2.x-era reports; re-run to refresh).
 
 ---
 

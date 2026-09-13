@@ -1,6 +1,6 @@
 # Strategy — CanvasV V4 FAST
 
-This document describes the **current baseline** (TradingView `v4.3.0`, Pine `strategy()`) signal logic precisely. It documents *what the code does*, not a proposal.
+This document describes the **current baseline** (TradingView `v4.3.4`, Pine `strategy()`) signal logic precisely. It documents *what the code does*, not a proposal.
 
 Pine source: [`TradingView/CanvasV_V4_FAST.pine`](../TradingView/CanvasV_V4_FAST.pine).
 Lite build: [`TradingView/CanvasV_V4_FAST_lite.pine`](../TradingView/CanvasV_V4_FAST_lite.pine) — signal-identical, diagnostics trimmed (see §13).
@@ -148,7 +148,7 @@ Entries go through `strategy.entry("Long"/"Short")` with a one-shot bar guard; a
 | Mid-trade break-even | off | `enableMidTradeBE`: after 10 bars, profit ≥ +0.25R → SL to entry |
 | **Stale-trade exit** | **on** | After 15 bars, position within −0.25R…+0.25R → close at market |
 | **Time expiry** | **on** | After 20 bars → close at market |
-| Session filter | off | `0800-1700:23456` (Mon–Fri) when enabled |
+| Session filter | off | `0800-1700:23456` (Mon–Fri) when enabled, plus in-session chart shading |
 
 The stale exit and expiry have no off switch — they always apply.
 
@@ -156,17 +156,17 @@ The stale exit and expiry have no off switch — they always apply.
 
 ## 12. Outcomes, MFE/MAE, diagnostics
 
-- **Outcomes:** `TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`, classified from the exit price vs the tracked levels. Counters feed the DEBUG panel and decisions log.
+- **Outcomes:** `TP2 FIRST` / `TP1 FIRST` / `SL FIRST` / `EXPIRED` / `SUPERSEDED`, classified from the exit price vs the tracked levels. Reversals key off the live position (not `stratDir`); superseded R is recorded immediately (W/L + net R + log + `V4OUT|`) and its later close registration skipped via a one-shot flag. Counters feed the DEBUG panel and decisions log.
 - **MFE/MAE** tracked in R for the open position; per-trade R recorded at close.
-- **Post-SL observation** (default 10 bars): after an `SL FIRST` exit, tracks max favorable excursion in R — *"did price move our way after the stop?"* Reported in the decisions log, a DEBUG label, and a `V4POST|` alert.
-- **Alerts (all off by default):** entry alerts; diagnostic `V4LOG|` (signal/rejection with `T=` bar time), `V4OUT|` (resolution: outcome, bars, MFE/MAE, R, entry); `alertcondition("CanvasV V4 BUY"/"SELL")` for TradingView alert dialogs.
-- **Visuals:** `NORMAL` mode = regime-colored EMA 21 trend line, ▲/▼ markers, Entry/SL/TP lines, compact 11-row panel. `DEBUG` adds the raw EMA set, a 15-row research panel (regime/setup/reason/RISK-RR/position/outcomes/W-L), the 12-line decisions log, and per-signal record labels. Signal logic is identical in both modes.
+- **Post-SL observation** (default 10 bars): after an `SL FIRST` exit, tracks max favorable excursion in R — *"did price move our way after the stop?"* Reported in the decisions log, a DEBUG label, and a `V4POST|` alert. New windows wait while one is running (no overlap).
+- **Alerts (all off by default):** entry alerts; diagnostic `V4LOG|` (signal/rejection with `T=` bar time), `V4OUT|` (resolution: outcome, bars, MFE/MAE, R, entry); `alertcondition("CanvasV V4 BUY"/"SELL"/"EXIT"/"TP1-80%")` for TradingView alert dialogs (messages include ticker/interval/price placeholders; TP1-80% is opt-in and fires at 80% of the way to TP1).
+- **Visuals:** `NORMAL` mode = trend-colored bars, regime-colored EMA 21 trend line, ▲/▼ markers, Entry/SL/TP lines, TP/SL zone boxes (profit green / risk red), signal info labels (`SL 3.2A · TP +1R`), compact 13-row panel with a PERF row (net R · win % · R-based PF) and a live MFE/MAE row; the POS row shows live TP1 progress % and is colored by unrealized P&L; SIGNAL shows bars since the signal; `cleanChart` mode hides panel/markers/labels for screenshots; POS shows position size. `DEBUG` adds the raw EMA set, a 17-row research panel (regime/setup/reason/RISK-RR/position/outcomes/W-L/PERF/MFE-MAE), the 12-line decisions log, and per-signal record labels. Signal logic is identical in both modes.
 
 ---
 
 ## 13. Lite build
 
-`TradingView/CanvasV_V4_FAST_lite.pine` (`v4.3.0-lite`) trims **diagnostics only**: no `visualMode`/`DEBUG` mode, no decisions log, no `V4LOG`/`V4OUT`/`V4POST` alerts, no post-SL window. Verified signal-identical to the full build:
+`TradingView/CanvasV_V4_FAST_lite.pine` (`v4.3.4-lite`) trims **diagnostics only**: no `visualMode`/`DEBUG` mode, no decisions log, no `V4LOG`/`V4OUT`/`V4POST` alerts, no post-SL window. Verified signal-identical to the full build:
 
 - `node scripts/check-pine-parity.mjs` — 95 identifiers + 50 inputs match.
 - `backtest/engine/output/V4-LITE-HOLDOUT90.md` — zero divergences across 3 symbols × 3 windows.
@@ -175,7 +175,7 @@ The stale exit and expiry have no off switch — they always apply.
 
 ## 14. Local engine parity
 
-`backtest/engine.mjs` reproduces the Pine v4.3.0 signal logic: every `DEFAULT_PARAMS` value equals its Pine input default (verified by direct extraction; no engine-only keys). Indicator math matches Pine `ta.*` semantics (EMA seed = SMA, Wilder RMA for ATR, `[1]`-shifted rolling extremes, NaN-safe warmup). TP1/TP2 exits credit exact limit R (v4.3.0), matching TradingView limit fills.
+`backtest/engine.mjs` reproduces the Pine v4.3.x signal logic: every `DEFAULT_PARAMS` value equals its Pine input default (verified by direct extraction; no engine-only keys). Indicator math matches Pine `ta.*` semantics (EMA seed = SMA, Wilder RMA for ATR, `[1]`-shifted rolling extremes, NaN-safe warmup). TP1/TP2 exits credit exact limit R (v4.3.0), matching TradingView limit fills.
 
 Deliberate differences (documented in the engine header):
 

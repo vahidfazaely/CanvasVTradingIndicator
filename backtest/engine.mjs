@@ -48,7 +48,7 @@ export const DEFAULT_PARAMS = {
 
   // Position Sizing (Phase 2)
   enableFixedRisk: true,
-  riskPerTrade: 0.5,
+  riskPerTrade: 1.0,
   maxPosSize: 0,
 
   // Breakout Quality (Phase 3)
@@ -531,8 +531,12 @@ export function runEngine(candles, params = DEFAULT_PARAMS, opts = {}) {
     // Note: the pullback-momentum gate (pbMomOk) was removed as dead code — pullbackUp/Dn
     // already require close > emaTrig (reclaimUp) / close < emaTrig (reclaimDn), so it was
     // mathematically always true.
-    const entryUp = cfgOk && setupUp && triggerUp && !hvBlock && extOkUp && bodyOkUp && hvVolOkUp && hvCloseOkUp && riskGateBuyOk && canEnterLong;
-    const entryDn = cfgOk && setupDn && triggerDn && !hvBlock && extOkDn && bodyOkDn && hvVolOkDn && hvCloseOkDn && riskGateSellOk && canEnterShort;
+    // Research-only entry veto: opts.entryFilter(barIdx, side, isPullback) -> false blocks.
+    // Absent by default, so the production path is byte-identical.
+    const entryOkUp = typeof opts.entryFilter === 'function' ? opts.entryFilter(barIdx, 1, pullbackUpV) !== false : true;
+    const entryOkDn = typeof opts.entryFilter === 'function' ? opts.entryFilter(barIdx, -1, pullbackDnV) !== false : true;
+    const entryUp = cfgOk && setupUp && triggerUp && !hvBlock && extOkUp && bodyOkUp && hvVolOkUp && hvCloseOkUp && riskGateBuyOk && canEnterLong && entryOkUp;
+    const entryDn = cfgOk && setupDn && triggerDn && !hvBlock && extOkDn && bodyOkDn && hvVolOkDn && hvCloseOkDn && riskGateSellOk && canEnterShort && entryOkDn;
 
     // Fixed-risk position sizing (Phase 2)
     const equity = 10000; // Fixed for backtest
@@ -740,7 +744,7 @@ export function analyzeSLFailures(trades, candles, window = 20) {
 // ─── Performance report ───────────────────────────────────────────
 
 export function generateReport(trades, opts = {}) {
-  const riskPct = opts.riskPerTrade ?? 0.5; // % of equity risked per trade (for account % DD)
+  const riskPct = opts.riskPerTrade ?? 1.0; // % of equity risked per trade (for account % DD)
   const closed = trades.filter(t => t.exitReason !== "SUPERSEDED");
   const winners = closed.filter(t => t.finalR > 0);
   const losers = closed.filter(t => t.finalR < 0);

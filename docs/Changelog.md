@@ -2,6 +2,137 @@
 
 All notable changes to CanvasV V4 FAST.
 
+## v4.3.6 — Fix v4.3.5 compile error + LuxAlgo-style panel polish
+
+Date: 2026-09-13
+
+- **FIX: v4.3.5 did not compile.** The `minChartTF` gate redeclared `tfSec`,
+  which already existed in the panel section (Pine forbids double declaration
+  in one scope). The gate variable is renamed to `tfChartSec` in both builds.
+  Caught on the branch before the master handoff — no action needed beyond
+  taking v4.3.6. (Reminder: `CanvasV-TV-Check.cmd` on Windows reports
+  COMPILES CLEAN or the exact Pine errors.)
+- **`compactSignals` (on by default, Visuals group)** — hides the four
+  ENTRY/SL/TP1/TP2 price tags; the BUY/SELL marker, level lines, TP/SL boxes,
+  and the panel ENTRY/SL/TP rows stay. About 5x more signal history fits in
+  the TradingView label limit. Both builds (FULL: signal + redrawn levels).
+- **`EQUITY` panel row** — live strategy equity vs initial capital (+x.xx%,
+  green/red). NORMAL 13→14 rows, DEBUG 17→18, Lite 11→12.
+- **`SYMBOL` panel row** — replaces TIMEFRAME, shows `BTCUSDT · 15M`.
+- **Low-TF hint** — on charts below `minChartTF` the SIGNAL row shows `LOW TF`
+  (orange) and DEBUG REASON shows `Below min timeframe`, so an empty 1m/5m
+  chart explains itself. No trading change: entries, gates, and exits are
+  untouched, R baselines unchanged (BTC 48t / +8.06R · ETH 46t / +7.33R ·
+  SOL 38t / +6.58R).
+
+## v4.3.5 — Minimum chart-TF gate, risk default 1%
+
+Date: 2026-09-13
+
+- **`minChartTF` gate (default `"15"`, Execution group)** — no new signals print
+  on charts below this timeframe, so 1m/5m charts stay signal-free. The gate is
+  ANDed into `entryUp`/`entryDn`, which covers strategy entries, BUY/SELL labels,
+  and BUY/SELL alertconditions in one place; blocked candidates log
+  `LOW TIMEFRAME` in diagnostics (same pattern as `OUTSIDE SESSION`). Exotic
+  chart types (Renko/Range/...) fail open (status quo). Set to `1S` to allow all
+  timeframes. Both Pine builds; the Node engine models 15m data only, so the gate
+  is a no-op there and R baselines are unchanged (BTC 48t / +8.06R · ETH 46t /
+  +7.33R · SOL 38t / +6.58R).
+- **Risk default 0.5% → 1.0%** (`Risk per trade (%)`, both builds + engine +
+  README). Evidence: `backtest/engine/output/V4-HTF-SESSION-MM-v45.md` — 1%
+  compounds to +24.1% / 4.1% max DD over 6 months on the 3-symbol portfolio.
+  R-multiples are size-independent, so trade lists are unaffected.
+
+## v4.3.4 — Clean-chart mode, TP1 approach alert, position size (no trading change)
+
+Date: 2026-09-12
+
+**Display/alert-only release — entries, gates, and exits are byte-identical to
+v4.3.3, so production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
+SOL 38t / +6.58R.** Both Pine builds; the Node engine is untouched.
+
+- **`cleanChart` mode (off by default)** — one switch hides the panel, BUY/SELL
+  markers, and signal info labels for clean screenshots/sharing. Level lines,
+  TP/SL boxes, and trend bars stay on the chart.
+- **TP1 approach alert (opt-in)** — a `CanvasV V4 TP1 80%` alertcondition fires
+  when the open position crosses 80% of the way to TP1 (R-based, realtime only).
+- **Position size in the POS row** — e.g. `LONG · 0.0512 · 5b · +0.4R · 40%`, so
+  fixed-risk sizing is visible at a glance (NORMAL, DEBUG, and Lite panels).
+
+
+## v4.3.3 — Live excursion row, P&L position colors, signal age (no trading change)
+
+Date: 2026-09-12
+
+**Display-only release — entries, gates, and exits are byte-identical to v4.3.2, so
+production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
+SOL 38t / +6.58R.** Both Pine builds; the Node engine is untouched.
+
+- **Live MFE/MAE panel row** — the open position's best and worst excursion in R
+  (`MFE +0.8R · MAE -0.3R`), updating every bar; `--` when flat. Added to the
+  NORMAL (13-row), DEBUG (17-row), and Lite (11-row) panels.
+- **Position colored by live P&L** — the POSITION/POS value is now green/red by
+  unrealized R instead of by direction (direction stays in the text); silver
+  when flat.
+- **Signal age** — the SIGNAL row shows bars elapsed since the last signal
+  (e.g. `BUY · 5b`).
+
+
+## v4.3.2 — TP progress, session shading, richer alerts (no trading change)
+
+Date: 2026-09-12
+
+**Display-only release — entries, gates, and exits are byte-identical to v4.3.1, so
+production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
+SOL 38t / +6.58R.** Both Pine builds; the Node engine is untouched.
+
+- **Live TP1 progress in the POS row** — the open position now shows how far it has
+  travelled toward TP1 as a percentage of the `tp1R` target (R-based, so it stays
+  correct if `tp1R` is retuned), e.g. `LONG · 5b · +0.4R · 40%`.
+- **In-session chart shading** — when the session filter is enabled, in-session
+  bars get a subtle blue background so off-hours price action is visible at a glance.
+- **Richer alert-dialog messages** — the BUY/SELL/EXIT `alertcondition` messages now
+  include `{{exchange}}:{{ticker}}`, `{{interval}}`, and `@ {{close}}` placeholders.
+
+
+## v4.3.1 — Supersede accounting fix + LuxAlgo visual pack (no trading change)
+
+Date: 2026-09-12
+
+**Presentation/statistics release — entries, gates, and exits are byte-identical to
+v4.3.0, so production baselines are unchanged: BTC 48t / +8.06R · ETH 46t / +7.33R ·
+SOL 38t / +6.58R.** Both Pine builds (`CanvasV_V4_FAST.pine`, `..._lite.pine`);
+the Node engine is untouched (it mirrors only the signal path).
+
+Bug fixes:
+
+- **Superseded trades were double-counted.** A reversal entry was detected via the
+  stale `stratDir` variable instead of the live `strategy.position_size`, so a
+  market-closed trade awaiting close detection also counted as "superseded"; the
+  superseded trade's R never reached W/L or the panel, and its later
+  `closedtrades` registration was then classified a *second* time against the NEW
+  trade's levels. Reversals now key off the actual position, the superseded R is
+  recorded immediately (W/L + net R + decisions log + `V4OUT|`), and the later
+  close registration is skipped via a one-shot flag. Latent in practice (0
+  supersedes in 180 days × 3 symbols) but wrong on principle — fixed.
+- **Post-SL observations could overlap** (full build): an `SL FIRST` exit landing
+  mid-window overwrote the in-flight observation. New windows now wait for the
+  running one to finish.
+
+LuxAlgo-style visuals (all toggleable, display-only, both builds):
+
+- **TP/SL zone boxes** — translucent profit (green, entry → TP1) and risk (red,
+  entry → SL) boxes extending right with the level lines; TP2 stays a dotted
+  runner line.
+- **Signal info labels** — `BUY · PULLBACK RESUME / SL 3.2A · TP +1R` at each entry
+  (`showSigLabels`, on by default).
+- **PERF panel row** — session net R, win %, and R-based profit factor from closed
+  trades (`stNetR` / `stGrossW` / `stGrossL` now accumulate on every close).
+- **Trend bars** — candles colored by regime trend (`colorBars`, on by default).
+- **`CanvasV V4 EXIT` alertcondition** — fires whenever a position closes.
+- Strategy titles updated to V4.3 (were stale V4.2).
+
+
 > **Repository note:** this checkout ships only the V4 line (`TradingView/CanvasV_V4_FAST*.pine`).
 > The V3 MTF indicator file (`TradingView/MyBuySellIndicator.pine`) and the `16d6e9e` /
 > `v3.4.4-legacy` baseline referenced below are not present in this repository's history —

@@ -1,12 +1,12 @@
 //@version=5
 //+------------------------------------------------------------------+
-//|  CanvasV V4.2 FAST Strategy — Lite (fast-compile build)          |
-//|  Signal logic matches TradingView/CanvasV_V4_FAST.pine (v4.3.0). |
+//|  CanvasV V4.3 FAST Strategy — Lite (fast-compile build)          |
+//|  Signal logic matches TradingView/CanvasV_V4_FAST.pine (v4.3.4). |
 //|  Lighter diagnostics: no DEBUG mode / decisions log / V4LOG.     |
 //+------------------------------------------------------------------+
-strategy("CanvasV V4.2 FAST Lite", shorttitle = "CanvasV V4.2 LITE", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 20, calc_on_every_tick = false, process_orders_on_close = false)
+strategy("CanvasV V4.3 FAST Lite", shorttitle = "CanvasV V4.3 LITE", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, max_lines_count = 10, max_labels_count = 20, calc_on_every_tick = false, process_orders_on_close = false)
 
-VERSION = "v4.3.0-lite"
+VERSION = "v4.3.6-lite"
 
 //--------------------------------------------------------------
 // Inputs
@@ -67,16 +67,21 @@ outcomeBars     = input.int(20, "Position expiry (bars)", minval = 2, group = gr
 //--- Session filter (Phase 3)
 useSessionFilter = input.bool(false, "Enable Session Filter", group = grpExec, tooltip = "Only allow new entries during the defined session window.")
 sessionInput     = input.session("0800-1700:23456", "Trading Session", group = grpExec, tooltip = "Pine session string, e.g. 0800-1700:23456 = Mon-Fri 8am-5pm.")
+minChartTF       = input.timeframe("15", "Minimum chart TF for signals", group = grpExec, tooltip = "Signals print only when the chart timeframe is this or higher. Default 15 blocks 1m/5m charts; set to 1S to allow all timeframes.")
 
 //--- Visuals
 showPanel   = input.bool(true, "Show panel", group = grpVis)
 showMarkers = input.bool(true, "Show BUY/SELL markers", group = grpVis)
 showLevels  = input.bool(true, "Show Entry/SL/TP lines", group = grpVis)
 showEMAs    = input.bool(false, "Show EMAs", group = grpVis)
+showSigLabels = input.bool(true, "Show signal info labels", group = grpVis)
+compactSignals = input.bool(true, "Compact signals (hide price tags)", group = grpVis, tooltip = "Hide the ENTRY/SL/TP1/TP2 price tags; keep the BUY/SELL marker, level lines and boxes. Shows ~5x more signal history within the TradingView label limit.")
+colorBars   = input.bool(true, "Color bars by trend", group = grpVis)
+cleanChart  = input.bool(false, "Clean chart mode (hide panel/markers/labels)", group = grpVis)
 
 //--- Position Sizing (Phase 2)
 enableFixedRisk = input.bool(true, "Enable fixed-risk position sizing", group = grpPos, tooltip = "When true, position size is calculated from risk per trade and SL distance. When false, uses default_qty_value.")
-riskPerTrade    = input.float(0.5, "Risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.1, group = grpPos, tooltip = "Percentage of equity risked per trade. Position size = risk_amount / stop_distance.")
+riskPerTrade    = input.float(1.0, "Risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.1, group = grpPos, tooltip = "Percentage of equity risked per trade. Position size = risk_amount / stop_distance.")
 maxPosSize      = input.float(0.0, "Max position size (0 = no limit)", minval = 0, step = 0.1, group = grpPos, tooltip = "Maximum position size in base currency units. 0 = unlimited.")
 
 //--- Breakout Quality (Phase 3)
@@ -102,6 +107,7 @@ hvCloseLocShort  = input.float(0.25, "HV: Close location max — Short", minval 
 
 //--- Alerts
 enableAlerts = input.bool(false, "Enable entry alerts", group = grpAlerts)
+enableTPWarn = input.bool(false, "Enable TP1 approach alert (80%)", group = grpAlerts)
 
 //--------------------------------------------------------------
 // Series (chart-TF only — no request.security, no lookahead)
@@ -241,6 +247,9 @@ cfgOk = emaTrigLen < emaDirLen and emaDirLen < emaSlowLen and swingLookback >= 2
 // Session filter (Phase 3)
 //--------------------------------------------------------------
 inSession = not useSessionFilter or not na(time(timeframe.period, sessionInput))
+// Minimum chart-TF gate: no new signals below minChartTF (na = exotic chart type → allow, status quo).
+tfChartSec = timeframe.in_seconds(timeframe.period)
+tfOK = na(tfChartSec) or tfChartSec >= timeframe.in_seconds(minChartTF)
 
 //--------------------------------------------------------------
 // Strategy state variables (for visual display & exit management)
@@ -258,6 +267,9 @@ var int    stratAge     = 0
 var float  stratMFE     = 0.0
 var float  stratMAE     = 0.0
 var bool   stratTp1Filled = false
+var bool   skipNextClose = false
+var string supPendTxt    = ""
+
 
 //--- Last signal for the panel
 var int    lastSigBar  = na
@@ -282,6 +294,10 @@ var label lblEntry = na
 var label lblSL    = na
 var label lblTP1   = na
 var label lblTP2   = na
+var box   bxRisk   = na
+var box   bxProfit = na
+var label lblSig   = na
+
 
 //--- Counters
 var int    stBuy   = 0
@@ -293,6 +309,10 @@ var int    stOutExp = 0
 var int    stOutSup = 0
 var int    stWin    = 0
 var int    stLoss   = 0
+var float  stNetR   = 0.0
+var float  stGrossW = 0.0
+var float  stGrossL = 0.0
+
 
 //--------------------------------------------------------------
 // Helpers
@@ -315,11 +335,11 @@ candUp = isConfirmed and cfgOk and setupUp and triggerUp
 candDn = isConfirmed and cfgOk and setupDn and triggerDn
 
 //--- Rejection reason tracking
-candReasonUp = hvBlock ? "HV BLOCKED" : not extOkUp ? "REJECT: EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
-candReasonDn = hvBlock ? "HV BLOCKED" : not extOkDn ? "REJECT: EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+candReasonUp = not tfOK ? "LOW TIMEFRAME" : hvBlock ? "HV BLOCKED" : not extOkUp ? "REJECT: EXTENDED" : not bodyOkUp ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateBuyOk ? (riskAtrBuy > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
+candReasonDn = not tfOK ? "LOW TIMEFRAME" : hvBlock ? "HV BLOCKED" : not extOkDn ? "REJECT: EXTENDED" : not bodyOkDn ? "CANDLE BODY" : not atrUsable ? "ATR INVALID" : not riskGateSellOk ? (riskAtrSell > maxRiskAtr ? "RISK TOO WIDE" : "INVALID STRUCTURE") : not inSession ? "OUTSIDE SESSION" : ""
 
-entryUp = candUp and not hvBlock and extOkUp and bodyOkUp and hvVolOkUp and hvCloseOkUp and riskGateBuyOk and inSession
-entryDn = candDn and not hvBlock and extOkDn and bodyOkDn and hvVolOkDn and hvCloseOkDn and riskGateSellOk and inSession
+entryUp = candUp and not hvBlock and extOkUp and bodyOkUp and hvVolOkUp and hvCloseOkUp and riskGateBuyOk and inSession and tfOK
+entryDn = candDn and not hvBlock and extOkDn and bodyOkDn and hvVolOkDn and hvCloseOkDn and riskGateSellOk and inSession and tfOK
 
 trigUpTxt = pullbackUpV ? "PULLBACK RESUME" : "BREAKOUT"
 trigDnTxt = pullbackDnV ? "PULLBACK RESUME" : "BREAKOUT"
@@ -348,10 +368,21 @@ shortPosSize  := enableFixedRisk and not na(shortPosSize) and shortPosSize > 0 ?
 //--------------------------------------------------------------
 if goLong
     strategy.entry("Long", strategy.long, qty = enableFixedRisk ? longPosSize : na)
-    //--- superseded short detection
-    if stratDir == -1
+    //--- superseded short detection (true reversal only: an actual open short;
+    //    stratDir alone would also match a market-closed trade awaiting detection)
+    if strategy.position_size < 0
+        supRL = (lastEntry - entry) / math.max(stratRisk, 1e-10)
+        supTxtL = "SUPERSEDED " + (supRL >= 0 ? "+" : "") + str.tostring(supRL, "#.##") + "R"
         stOutSup := stOutSup + 1
-        lastOutcome := "SUPERSEDED"
+        skipNextClose := true
+        supPendTxt := supTxtL
+        if supRL > 0
+            stWin := stWin + 1
+            stGrossW := stGrossW + supRL
+        else
+            stLoss := stLoss + 1
+            stGrossL := stGrossL - supRL
+        stNetR := stNetR + supRL
     stratDir     := 1
     stratDirTxt  := "BUY"
     stratTrigTxt := trigUpTxt
@@ -395,15 +426,26 @@ if goLong
         label.delete(lblTP1)
     if not na(lblTP2)
         label.delete(lblTP2)
+    if not na(bxRisk)
+        box.delete(bxRisk)
+    if not na(bxProfit)
+        box.delete(bxProfit)
+    if not na(lblSig)
+        label.delete(lblSig)
     if showLevels
         lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
         lnSL    := line.new(bar_index, slBuy,  bar_index, slBuy,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
         lnTP1   := line.new(bar_index, tp1Buy, bar_index, tp1Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
         lnTP2   := line.new(bar_index, tp2Buy, bar_index, tp2Buy, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.green, 0), style = line.style_dotted, width = 1)
-        lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
-        lblSL    := label.new(bar_index, slBuy,  "SL " + f_rtxt(slBuy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
-        lblTP1   := label.new(bar_index, tp1Buy, "T1 " + f_rtxt(tp1Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
-        lblTP2   := label.new(bar_index, tp2Buy, "T2 " + f_rtxt(tp2Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
+        bxRisk   := box.new(left = bar_index, top = entry, right = bar_index, bottom = slBuy, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
+        bxProfit := box.new(left = bar_index, top = tp1Buy, right = bar_index, bottom = entry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
+        if not compactSignals
+            lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
+            lblSL    := label.new(bar_index, slBuy,  "SL " + f_rtxt(slBuy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
+            lblTP1   := label.new(bar_index, tp1Buy, "T1 " + f_rtxt(tp1Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
+            lblTP2   := label.new(bar_index, tp2Buy, "T2 " + f_rtxt(tp2Buy), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.green, size = size.tiny)
+    if showSigLabels and not cleanChart
+        lblSig := label.new(bar_index, low - atrVal * 1.0, "BUY · " + trigUpTxt + "\nSL " + str.tostring(riskAtrBuy, "#.##") + "A · TP +" + str.tostring(tp1R, "#.##") + "R", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, size = size.small)
     if enableAlerts
         alert(syminfo.ticker + " " + timeframe.period + ": BUY | " + trigUpTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slBuy, format.mintick) + " TP1 " + str.tostring(tp1Buy, format.mintick) + " TP2 " + str.tostring(tp2Buy, format.mintick), alert.freq_once_per_bar_close)
 
@@ -412,10 +454,21 @@ if goLong
 //--------------------------------------------------------------
 if goShort
     strategy.entry("Short", strategy.short, qty = enableFixedRisk ? shortPosSize : na)
-    //--- superseded long detection
-    if stratDir == 1
+    //--- superseded long detection (true reversal only: an actual open long;
+    //    stratDir alone would also match a market-closed trade awaiting detection)
+    if strategy.position_size > 0
+        supRS = (entry - lastEntry) / math.max(stratRisk, 1e-10)
+        supTxtS = "SUPERSEDED " + (supRS >= 0 ? "+" : "") + str.tostring(supRS, "#.##") + "R"
         stOutSup := stOutSup + 1
-        lastOutcome := "SUPERSEDED"
+        skipNextClose := true
+        supPendTxt := supTxtS
+        if supRS > 0
+            stWin := stWin + 1
+            stGrossW := stGrossW + supRS
+        else
+            stLoss := stLoss + 1
+            stGrossL := stGrossL - supRS
+        stNetR := stNetR + supRS
     stratDir     := -1
     stratDirTxt  := "SELL"
     stratTrigTxt := trigDnTxt
@@ -459,15 +512,26 @@ if goShort
         label.delete(lblTP1)
     if not na(lblTP2)
         label.delete(lblTP2)
+    if not na(bxRisk)
+        box.delete(bxRisk)
+    if not na(bxProfit)
+        box.delete(bxProfit)
+    if not na(lblSig)
+        label.delete(lblSig)
     if showLevels
         lnEntry := line.new(bar_index, entry,  bar_index, entry,  xloc = xloc.bar_index, extend = extend.right, color = color.new(color.white, 0), style = line.style_dotted, width = 2)
         lnSL    := line.new(bar_index, slSell, bar_index, slSell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 2)
         lnTP1   := line.new(bar_index, tp1Sell, bar_index, tp1Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
         lnTP2   := line.new(bar_index, tp2Sell, bar_index, tp2Sell, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 0),   style = line.style_dotted, width = 1)
-        lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
-        lblSL    := label.new(bar_index, slSell, "SL " + f_rtxt(slSell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
-        lblTP1   := label.new(bar_index, tp1Sell, "T1 " + f_rtxt(tp1Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.tiny)
-        lblTP2   := label.new(bar_index, tp2Sell, "T2 " + f_rtxt(tp2Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.tiny)
+        bxRisk   := box.new(left = bar_index, top = slSell, right = bar_index, bottom = entry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
+        bxProfit := box.new(left = bar_index, top = entry, right = bar_index, bottom = tp1Sell, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
+        if not compactSignals
+            lblEntry := label.new(bar_index, entry,  "E " + f_rtxt(entry), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.white, size = size.tiny)
+            lblSL    := label.new(bar_index, slSell, "SL " + f_rtxt(slSell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,   size = size.tiny)
+            lblTP1   := label.new(bar_index, tp1Sell, "T1 " + f_rtxt(tp1Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red, size = size.tiny)
+            lblTP2   := label.new(bar_index, tp2Sell, "T2 " + f_rtxt(tp2Sell), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.red,  size = size.tiny)
+    if showSigLabels and not cleanChart
+        lblSig := label.new(bar_index, high + atrVal * 1.0, "SELL · " + trigDnTxt + "\nSL " + str.tostring(riskAtrSell, "#.##") + "A · TP +" + str.tostring(tp1R, "#.##") + "R", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
     if enableAlerts
         alert(syminfo.ticker + " " + timeframe.period + ": SELL | " + trigDnTxt + " | E " + str.tostring(entry, format.mintick) + " SL " + str.tostring(slSell, format.mintick) + " TP1 " + str.tostring(tp1Sell, format.mintick) + " TP2 " + str.tostring(tp2Sell, format.mintick), alert.freq_once_per_bar_close)
 
@@ -553,7 +617,18 @@ if strategy.position_size < 0
 //--------------------------------------------------------------
 // Detect trade closures for outcome tracking + diagnostics
 //--------------------------------------------------------------
-if strategy.closedtrades > strategy.closedtrades[1]
+//--- Exit-bar flag (shared by the supersede skip, the detector, and the EXIT alert)
+isExitBar  = strategy.closedtrades > strategy.closedtrades[1]
+supSkipBar = isExitBar and skipNextClose
+
+//--- Superseded trades were already recorded at reversal time —
+//    skip their later close registration (one-shot)
+if supSkipBar
+    skipNextClose := false
+    lastOutcome := supPendTxt
+    supPendTxt := ""
+
+if isExitBar and not supSkipBar
     ctIdx    = strategy.closedtrades - 1
     ctExitP  = strategy.closedtrades.exit_price(ctIdx)
     ctSize   = strategy.closedtrades.size(ctIdx)
@@ -575,6 +650,11 @@ if strategy.closedtrades > strategy.closedtrades[1]
         stWin := stWin + 1
     else
         stLoss := stLoss + 1
+    stNetR := stNetR + ctR
+    if ctR > 0
+        stGrossW := stGrossW + ctR
+    else
+        stGrossL := stGrossL - ctR
     lastOutcome := posOut + " " + (ctR >= 0 ? "+" : "") + str.tostring(ctR, "#.##") + "R"
     stratDir     := 0
     stratDirTxt  := ""
@@ -589,14 +669,18 @@ if strategy.closedtrades > strategy.closedtrades[1]
 markerGapAtr = 0.5
 trendCol = trendUp ? color.new(color.green, 0) : trendDn ? color.new(color.red, 0) : color.new(color.gray, 60)
 plot(emaDir, "Trend", color = trendCol, linewidth = 2)
+//--- LuxAlgo-style trend bars (display only)
+barcolor(not colorBars ? na : trendUp ? color.green : trendDn ? color.red : na)
+bgcolor(useSessionFilter and inSession ? color.new(color.blue, 95) : na, title = "Session")
 plot(showEMAs ? emaTrig : na, "Trigger EMA",  color = color.new(color.blue, 0), linewidth = 1)
 plot(showEMAs ? emaSlow : na, "Slow EMA",     color = color.new(color.silver, 0), linewidth = 2)
 
-plotshape(showMarkers and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
-plotshape(showMarkers and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
+plotshape(showMarkers and not cleanChart and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
+plotshape(showMarkers and not cleanChart and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
 
-alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY signal")
-alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL signal")
+alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
+alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
+alertcondition(isExitBar, title = "CanvasV V4 EXIT", message = "CanvasV V4 EXIT {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
 
 //--------------------------------------------------------------
 // Dashboard panel (NORMAL — lightweight)
@@ -608,27 +692,51 @@ isLong      = posSize > 0
 isShort     = posSize < 0
 
 posCurR = isLong ? (close - posAvgPrice) / math.max(stratRisk, 1e-10) : isShort ? (posAvgPrice - close) / math.max(stratRisk, 1e-10) : na
-posCol  = isLong ? color.green : isShort ? color.red : color.silver
+//--- Live progress to TP1 for the open position (fraction of the tp1R target)
+posProg = isFlat or na(posCurR) ? na : posCurR / math.max(tp1R, 1e-10)
+progTxt = na(posProg) ? "" : " · " + str.tostring(posProg * 100, "#") + "%"
+//--- Live excursion of the open position (best/worst R since entry)
+excTxt = isFlat ? "—" : "MFE +" + str.tostring(stratMFE, "#.##") + "R · MAE -" + str.tostring(stratMAE, "#.##") + "R"
+//--- Bars elapsed since the last signal
+sigAgeTxt = na(lastSigBar) ? "" : " · " + str.tostring(bar_index - lastSigBar) + "b"
+//--- Position size for the POS row (lots/contracts at a glance)
+posQtyTxt = isFlat ? "" : str.tostring(math.abs(strategy.position_size), "#.####") + " · "
+//--- TP1 approach warning (80% of the way to TP1; realtime alerts only)
+tpWarn = enableTPWarn and ta.crossover(posProg, 0.8)
+alertcondition(tpWarn, title = "CanvasV V4 TP1 80%", message = "CanvasV V4 {{exchange}}:{{ticker}} {{interval}} 80% to TP1 @ {{close}}")
+posCol  = isFlat or na(posCurR) ? color.silver : posCurR >= 0 ? color.green : color.red
 sigCol  = lastSigTxt == "BUY" ? color.green : lastSigTxt == "SELL" ? color.red : color.silver
+sigShowTxt = not tfOK ? "LOW TF" : lastSigTxt + sigAgeTxt
+sigShowCol = not tfOK ? color.orange : sigCol
 tpCol   = lastSigTxt == "BUY" ? color.green : color.red
+
+//--- Session performance (closed trades only; R-based)
+perfN = stWin + stLoss
+perfWR = perfN > 0 ? stWin / perfN * 100 : 0.0
+perfPFTxt = perfN == 0 ? "—" : stGrossL == 0 ? "∞" : str.tostring(stGrossW / stGrossL, "#.##")
+perfTxt = perfN == 0 ? "—" : (stNetR >= 0 ? "+" : "") + str.tostring(stNetR, "#.##") + "R · " + str.tostring(perfWR, "#") + "% · PF " + perfPFTxt
+eqPct = (strategy.equity / strategy.initial_capital - 1) * 100
+eqTxt = (eqPct >= 0 ? "+" : "") + str.tostring(eqPct, "#.##") + "%"
+eqCol = eqPct >= 0 ? color.green : color.red
 
 tfSec = timeframe.in_seconds(timeframe.period)
 tfTxt = tfSec == 900 ? "15M" : tfSec == 60 ? "1M" : tfSec == 3600 ? "1H" : tfSec == 14400 ? "4H" : tfSec == 86400 ? "1D" : str.tostring(timeframe.period)
+tfSymTxt = syminfo.ticker + " · " + tfTxt
 
 var table v4panel = na
 
-if showPanel
+if showPanel and not cleanChart
     if na(v4panel)
-        v4panel := table.new(position.top_right, 2, 9, border_width = 1, border_color = color.new(color.gray, 50), bgcolor = color.new(color.rgb(26, 26, 32), 10))
+        v4panel := table.new(position.top_right, 2, 12, border_width = 1, border_color = color.new(color.gray, 50), bgcolor = color.new(color.rgb(26, 26, 32), 10))
     trendTxt = trendUp ? "BULL ↑" : trendDn ? "BEAR ↓" : "RANGE"
     trendColN = trendUp ? color.green : trendDn ? color.red : color.silver
-    posTxt = isLong ? "LONG " + str.tostring(stratAge) + "b" : isShort ? "SHORT " + str.tostring(stratAge) + "b" : lastOutcome != "" ? "FLAT · " + lastOutcome : "FLAT"
+    posTxt = isLong ? "LONG " + posQtyTxt + str.tostring(stratAge) + "b" + progTxt : isShort ? "SHORT " + posQtyTxt + str.tostring(stratAge) + "b" + progTxt : lastOutcome != "" ? "FLAT · " + lastOutcome : "FLAT"
     table.cell(v4panel, 0, 0, "CANVASV V4", text_color = color.white, text_size = size.normal)
     table.cell(v4panel, 1, 0, VERSION, text_color = color.silver, text_size = size.small)
-    table.cell(v4panel, 0, 1, tfTxt, text_color = color.silver, text_size = size.small)
+    table.cell(v4panel, 0, 1, tfSymTxt, text_color = color.silver, text_size = size.small)
     table.cell(v4panel, 1, 1, trendTxt, text_color = trendColN, text_size = size.normal)
     table.cell(v4panel, 0, 2, "SIGNAL", text_color = color.silver, text_size = size.small)
-    table.cell(v4panel, 1, 2, lastSigTxt, text_color = sigCol, text_size = size.large)
+    table.cell(v4panel, 1, 2, sigShowTxt, text_color = sigShowCol, text_size = size.large)
     table.cell(v4panel, 0, 3, "POS", text_color = color.silver, text_size = size.small)
     table.cell(v4panel, 1, 3, posTxt, text_color = posCol, text_size = size.normal)
     table.cell(v4panel, 0, 4, "ENTRY", text_color = color.silver, text_size = size.small)
@@ -641,6 +749,12 @@ if showPanel
     table.cell(v4panel, 1, 7, na(lastRiskAtr) ? "—" : str.tostring(lastRiskAtr, "#.##") + "A", text_color = color.white, text_size = size.small)
     table.cell(v4panel, 0, 8, "W/L", text_color = color.silver, text_size = size.small)
     table.cell(v4panel, 1, 8, str.tostring(stWin) + "W/" + str.tostring(stLoss) + "L  SL" + str.tostring(stOutSl) + " T1" + str.tostring(stOutTp1) + " T2" + str.tostring(stOutTp2), text_color = color.white, text_size = size.small)
+    table.cell(v4panel, 0, 9, "PERF", text_color = color.silver, text_size = size.small)
+    table.cell(v4panel, 1, 9, perfTxt, text_color = color.white, text_size = size.small)
+    table.cell(v4panel, 0, 10, "MFE/MAE", text_color = color.silver, text_size = size.small)
+    table.cell(v4panel, 1, 10, excTxt, text_color = color.white, text_size = size.small)
+    table.cell(v4panel, 0, 11, "EQUITY", text_color = color.silver, text_size = size.small)
+    table.cell(v4panel, 1, 11, eqTxt, text_color = eqCol, text_size = size.normal)
 else
     if not na(v4panel)
         table.delete(v4panel)
