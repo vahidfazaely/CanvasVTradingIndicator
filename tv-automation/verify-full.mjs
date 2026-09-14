@@ -88,20 +88,65 @@ try {
     } catch { /* retry */ }
     await page.waitForTimeout(2000);
   }
-  log(`add-to-chart clicked: ${clicked}; waiting 30s...`);
-  await page.waitForTimeout(30000);
-
-  const c = await page.evaluate(() => {
-    const all = document.body.innerText;
-    const lines = all.split("\n").map((l) => l.trim()).filter(Boolean);
-    const diag = lines.filter((l) => /error at \d+:\d+|line \d+.*(?:error|syntax|undeclared|already defined|expected|argument)|syntax error|undeclared identifier|does not have an argument|Compiling/i.test(l));
-    const hasErr = /error at \d+:\d+|syntax error|undeclared identifier|is already defined|does not have an argument/.test(all);
-    return { diag: diag.slice(0, 20), hasErr, head: all.slice(0, 400) };
-  });
+  log(`add-to-chart clicked: ${clicked}; forcing compile via editor Ctrl+S, then polling log trail...`);
+  // Ground truth = the Pine editor console trail the user sees manually:
+  //   fail:   "X" opened / Compiling... / Error at L:C ...
+  //   pass:   "X" opened / Compiling... / "X" saved.
+  // The plain Add-to-chart click can silently no-op in headless sessions;
+  // Ctrl+S inside the editor triggers the same compile+save path a human uses.
+  async function forceCompile() {
+    try {
+      const ta = page.locator(".monaco-editor textarea").first();
+      await ta.click({ timeout: 5000, force: true });
+      await page.keyboard.press("Control+s");
+      log("  forceCompile: Ctrl+S sent");
+      return true;
+    } catch { log("  forceCompile: editor focus failed"); return false; }
+  }
+  await forceCompile();
+  let verdict = "INCONCLUSIVE_TIMEOUT";
+  let diag = [];
+  let sig = { sawCompiling: false, saved: false, legendC: 0, opened: false };
+  const pollDeadline = Date.now() + 300000; // 5 min max
+  let polls = 0;
+  while (Date.now() < pollDeadline) {
+    await page.waitForTimeout(5000);
+    polls++;
+    try {
+      const dlg = page.locator('button:has-text("Save"), button:has-text("OK")').first();
+      if (await dlg.isVisible({ timeout: 500 }).catch(() => false)) await dlg.click({ timeout: 2000, force: true });
+    } catch { /* no dialog */ }
+    const s = await page.evaluate(() => {
+      const all = document.body.innerText;
+      const errM = all.match(/Error at \d+:\d+[^\\n]*/);
+      const legends = Array.from(document.querySelectorAll("[data-name='legend']")).map((e) => e.textContent || "");
+      return {
+        err: errM ? errM[0].slice(0, 160) : null,
+        compiling: /Compiling/i.test(all),
+        saved: /"[^"\\n]{0,60}" saved/i.test(all),
+        opened: /"[^"\\n]{0,60}" opened/i.test(all),
+        legendC: legends.length,
+        legendHit: legends.some((t) => /CanvasV/i.test(t)),
+      };
+    });
+    sig = { sawCompiling: s.compiling, saved: s.saved, legendC: s.legendC, opened: s.opened };
+    if (s.err) { diag = [s.err]; verdict = "COMPILE_ERROR"; log(`  poll ${polls}: ERROR -> ${s.err}`); break; }
+    log(`  poll ${polls}: compiling=${s.compiling} saved=${s.saved} opened=${s.opened} legends=${s.legendC} legendHit=${s.legendHit}`);
+    // If the editor never even acknowledged the script, re-send Ctrl+S twice.
+    if (!s.compiling && !s.opened && (polls === 12 || polls === 24)) await forceCompile();
+    if (s.compiling && (s.saved || s.legendHit)) {
+      // confirm stability once more before declaring clean
+      await page.waitForTimeout(8000);
+      const s2 = await page.evaluate(() => ({ err: /Error at \d+:\d+/.test(document.body.innerText) }));
+      if (!s2.err) { verdict = "COMPILES_CLEAN"; break; }
+    }
+  }
+  const c = { diag, hasErr: verdict === "COMPILE_ERROR" };
   log(`FULL diag lines: ${JSON.stringify(c.diag)}`);
-  log(`FULL has compile error: ${c.hasErr}`);
+  log(`FULL verdict: ${verdict} | last signals: ${JSON.stringify(sig)}`);
+  if (verdict === "INCONCLUSIVE_TIMEOUT") log(`FULL signals at timeout: compiling=${sig.sawCompiling} saved=${sig.saved} opened=${sig.opened} legends=${sig.legendC}`);
   await screenshot(page, "full-loaded.png");
-  log(c.hasErr ? "RESULT: FULL COMPILE ERROR(S)" : "RESULT: FULL COMPILES CLEAN");
+  log(verdict === "COMPILE_ERROR" ? "RESULT: FULL COMPILE ERROR(S)" : verdict === "COMPILES_CLEAN" ? "RESULT: FULL COMPILES CLEAN" : "RESULT: FULL INCONCLUSIVE (no error seen, no legend seen)");
 } catch (e) {
   log(`FATAL: ${e.message.split("\n")[0]}`);
   await screenshot(page, "full-error.png").catch(() => {});
