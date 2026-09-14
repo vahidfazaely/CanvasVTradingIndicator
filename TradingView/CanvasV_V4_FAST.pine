@@ -1109,4 +1109,3 @@ else if showLevels != prevShowLevels
             else
                 bxRisk   := box.new(left = lastSigBar, top = lastSL, right = lastSigBar, bottom = lastEntry, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 88))
                 bxProfit := box.new(left = lastSigBar, top = lastEntry, right = lastSigBar, bottom = lastTP1, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 60), bgcolor = color.new(color.green, 88))
-w(color.green, 88))
