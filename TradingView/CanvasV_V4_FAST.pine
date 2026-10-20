@@ -1,4 +1,5 @@
-//@version=5
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=6
 //+------------------------------------------------------------------+
 //|  CanvasV V4 FAST Strategy — Pine Script v5                        |
 //|  Strategy conversion with partial TP, break-even, session gate.  |
@@ -115,6 +116,7 @@ hvMode = input.string("Stronger Confirmation", "High-volatility mode", options =
 hvVolMin         = input.float(1.40, "HV: Min relative vol", minval = 0.5, step = 0.1, group = grpHV, tooltip = "Stronger confirmation: minimum relative volume during high vol.")
 hvCloseLocLong   = input.float(0.75, "HV: Close location min — Long", minval = 0.0, maxval = 1.0, step = 0.05, group = grpHV)
 hvCloseLocShort  = input.float(0.25, "HV: Close location max — Short", minval = 0.0, maxval = 1.0, step = 0.05, group = grpHV)
+hvRiskMultiplier = input.float(0.50, "HV: Risk multiplier", minval = 0.10, maxval = 1.00, step = 0.05, group = grpHV, tooltip = "Position-risk fraction used when High-volatility mode is Reduce Risk.")
 
 //--- Alerts
 enableAlerts     = input.bool(false, "Enable entry alerts", group = grpAlerts)
@@ -276,7 +278,9 @@ var float  stratSL     = na
 var float  stratTP1    = na
 var float  stratTP2    = na
 var float  stratRisk   = na
+var float  stratRiskCash = na
 var float  stratRiskAtr = na
+var float  partialPnl = 0.0
 var int    stratDir    = 0        // 1 LONG, -1 SHORT, 0 FLAT
 var string stratDirTxt = ""
 var string stratTrigTxt = ""
@@ -405,21 +409,30 @@ trigDnTxt = pullbackDnV ? "PULLBACK RESUME" : "BREAKOUT"
 //  every bar.  Use a bar_index guard so we only call them on the
 //  confirmed bar where entryUp / entryDn first goes true.
 //--------------------------------------------------------------
-bool goLong  = entryUp and (na(stratEntryBar) or bar_index != stratEntryBar or stratDir != 1)
-bool goShort = entryDn and (na(stratEntryBar) or bar_index != stratEntryBar or stratDir != -1)
+bool goLong  = entryUp and strategy.position_size <= 0 and (na(stratEntryBar) or bar_index != stratEntryBar)
+bool goShort = entryDn and strategy.position_size >= 0 and (na(stratEntryBar) or bar_index != stratEntryBar)
 
 //--------------------------------------------------------------
 // Fixed-risk position sizing (Phase 2)
 //--------------------------------------------------------------
-longPosRaw  = enableFixedRisk and riskBuy > 0 ? strategy.equity * riskPerTrade / 100.0 / riskBuy : na
-longPosCapped = enableFixedRisk and not na(longPosRaw) and maxPosSize > 0 ? math.min(longPosRaw, maxPosSize) : longPosRaw
-longPosSize  = enableFixedRisk and not na(longPosCapped) ? math.floor(longPosCapped * 10000) / 10000 : na
-longPosSize  := enableFixedRisk and not na(longPosSize) and longPosSize > 0 ? longPosSize : na
+riskScale = highVol and hvMode == "Reduce Risk" ? hvRiskMultiplier : 1.0
+riskCash = strategy.equity * riskPerTrade / 100.0 * riskScale
+pointValue = math.max(syminfo.pointvalue, 1e-10)
+qtyStep = syminfo.type == "futures" ? 1.0 : 0.0001
 
-shortPosRaw   = enableFixedRisk and riskSell > 0 ? strategy.equity * riskPerTrade / 100.0 / riskSell : na
+longPosRaw = enableFixedRisk and riskBuy > 0 ? riskCash / (riskBuy * pointValue) : na
+longPosCapped = enableFixedRisk and not na(longPosRaw) and maxPosSize > 0 ? math.min(longPosRaw, maxPosSize) : longPosRaw
+longPosSize = enableFixedRisk and not na(longPosCapped) ? math.floor(longPosCapped / qtyStep) * qtyStep : na
+longPosSize := enableFixedRisk and not na(longPosSize) and longPosSize >= qtyStep ? longPosSize : na
+
+shortPosRaw = enableFixedRisk and riskSell > 0 ? riskCash / (riskSell * pointValue) : na
 shortPosCapped = enableFixedRisk and not na(shortPosRaw) and maxPosSize > 0 ? math.min(shortPosRaw, maxPosSize) : shortPosRaw
-shortPosSize  = enableFixedRisk and not na(shortPosCapped) ? math.floor(shortPosCapped * 10000) / 10000 : na
-shortPosSize  := enableFixedRisk and not na(shortPosSize) and shortPosSize > 0 ? shortPosSize : na
+shortPosSize = enableFixedRisk and not na(shortPosCapped) ? math.floor(shortPosCapped / qtyStep) * qtyStep : na
+shortPosSize := enableFixedRisk and not na(shortPosSize) and shortPosSize >= qtyStep ? shortPosSize : na
+
+// A na quantity in strategy.entry falls back to the strategy default; block it explicitly.
+goLong := goLong and (not enableFixedRisk or not na(longPosSize)) and strategy.closedtrades == nz(strategy.closedtrades[1], 0)
+goShort := goShort and (not enableFixedRisk or not na(shortPosSize)) and strategy.closedtrades == nz(strategy.closedtrades[1], 0)
 
 //--------------------------------------------------------------
 // Strategy entry — LONG
@@ -454,6 +467,8 @@ if goLong
     stratTP1     := tp1Buy
     stratTP2     := tp2Buy
     stratRisk    := riskBuy
+    stratRiskCash := riskBuy * (enableFixedRisk ? longPosSize : 1.0) * pointValue
+    partialPnl := 0.0
     stratRiskAtr := riskAtrBuy
     stratAge     := 0
     stratMFE     := 0.0
@@ -554,6 +569,8 @@ if goShort
     stratTP1     := tp1Sell
     stratTP2     := tp2Sell
     stratRisk    := riskSell
+    stratRiskCash := riskSell * (enableFixedRisk ? shortPosSize : 1.0) * pointValue
+    partialPnl := 0.0
     stratRiskAtr := riskAtrSell
     stratAge     := 0
     stratMFE     := 0.0
@@ -635,6 +652,8 @@ midCurR = 0.0
 staleR = 0.0
 
 if strategy.position_size > 0
+    // Update age before evaluating age-based break-even rules.
+    stratAge := bar_index - stratEntryBar
     //--- Break-even: detect TP1 fill (position was reduced)
     if enableMoveBE and enablePartialTP and strategy.position_size < strategy.position_size[1]
         stratTp1Filled := true
@@ -657,14 +676,13 @@ if strategy.position_size > 0
     longMAE = (strategy.position_avg_price - low) / math.max(stratRisk, 1e-10)
     stratMFE := math.max(stratMFE, longMFE)
     stratMAE := math.max(stratMAE, longMAE)
-    //--- Stale trade exit: if flat after staleBarLimit bars, exit at market
-    if stratAge >= staleBarLimit and strategy.position_size > 0
+    //--- One market-close reason per bar; expiry takes priority over the stale test.
+    if stratAge >= outcomeBars
+        strategy.close("Long", comment = "EXPIRED")
+    else if stratAge >= staleBarLimit
         staleR := (close - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
         if staleR > -0.25 and staleR < 0.25
             strategy.close("Long", comment = "STALE_EXIT")
-    //--- Expiry exit
-    if stratAge >= outcomeBars and strategy.position_size > 0
-        strategy.close("Long", comment = "EXPIRED")
 
 if strategy.position_size < 0
     //--- Break-even: detect TP1 fill (position became less negative)
@@ -689,20 +707,28 @@ if strategy.position_size < 0
     shortMAE = (high - strategy.position_avg_price) / math.max(stratRisk, 1e-10)
     stratMFE := math.max(stratMFE, shortMFE)
     stratMAE := math.max(stratMAE, shortMAE)
-    //--- Stale trade exit: if flat after staleBarLimit bars, exit at market
-    if stratAge >= staleBarLimit and strategy.position_size < 0
+    //--- One market-close reason per bar; expiry takes priority over the stale test.
+    if stratAge >= outcomeBars
+        strategy.close("Short", comment = "EXPIRED")
+    else if stratAge >= staleBarLimit
         staleR := (strategy.position_avg_price - close) / math.max(stratRisk, 1e-10)
         if staleR > -0.25 and staleR < 0.25
             strategy.close("Short", comment = "STALE_EXIT")
-    //--- Expiry exit
-    if stratAge >= outcomeBars and strategy.position_size < 0
-        strategy.close("Short", comment = "EXPIRED")
 
 //--------------------------------------------------------------
 // Detect trade closures for outcome tracking + diagnostics
 //--------------------------------------------------------------
-//--- Exit-bar flag (shared by the supersede skip, the detector, and the EXIT alert)
-isExitBar  = strategy.closedtrades > strategy.closedtrades[1]
+//--- Track closed fill fragments without treating a partial TP as a completed position.
+closedCountBefore = nz(strategy.closedtrades[1], 0)
+closedCountChange = strategy.closedtrades - closedCountBefore
+closedBarPnl = 0.0
+if closedCountChange > 0
+    for closedIdx = closedCountBefore to strategy.closedtrades - 1
+        closedBarPnl += strategy.closedtrades.profit(closedIdx)
+partialExitBar = closedCountChange > 0 and strategy.position_size != 0 and strategy.position_size[1] != 0 and strategy.position_size * strategy.position_size[1] > 0
+if partialExitBar
+    partialPnl += closedBarPnl
+isExitBar = closedCountChange > 0 and not partialExitBar
 supSkipBar = isExitBar and skipNextClose
 
 //--- Superseded trades were already recorded at reversal time —
@@ -711,6 +737,7 @@ if supSkipBar
     skipNextClose := false
     lastOutcome := supPendTxt
     supPendTxt := ""
+    partialPnl := 0.0
 
 if isExitBar and not supSkipBar
     ctIdx     = strategy.closedtrades - 1
@@ -719,11 +746,11 @@ if isExitBar and not supSkipBar
     ctEntryBar = strategy.closedtrades.entry_bar_index(ctIdx)
     ctExitBar  = strategy.closedtrades.exit_bar_index(ctIdx)
     ctSize     = strategy.closedtrades.size(ctIdx)
-    ctPnL      = strategy.closedtrades.profit(ctIdx)
+    ctPnL      = partialPnl + closedBarPnl
     //--- Determine outcome
     ctIsLong = ctSize > 0
     //--- Calculate R
-    ctR = ctIsLong ? (ctExitP - ctEntryP) / math.max(stratRisk, 1e-10) : (ctEntryP - ctExitP) / math.max(stratRisk, 1e-10)
+    ctR = ctPnL / math.max(stratRiskCash, 1e-10)
     lastFinalR := ctR
     //--- Detect outcome type from exit price relative to TP/SL levels
     if ctIsLong
@@ -811,6 +838,7 @@ if isExitBar and not supSkipBar
     stratMFE     := 0.0
     stratMAE     := 0.0
     stratTp1Filled := false
+    partialPnl := 0.0
     lastOutcome  := posOut + " " + (ctR >= 0 ? "+" : "") + str.tostring(ctR, "#.##") + "R"
 
 //--------------------------------------------------------------
@@ -870,11 +898,11 @@ plot(emaDir, "Direction EMA", color = visualMode == "DEBUG" and showEMAs ? color
 plot(emaSlow, "Slow EMA",     color = visualMode == "DEBUG" and showEMAs ? color.new(color.silver, 0) : color.new(color.white, 100), linewidth = 2)
 
 //--- BUY / SELL markers
-plotshape(showMarkers and not cleanChart and entryUp, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
-plotshape(showMarkers and not cleanChart and entryDn, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
+plotshape(showMarkers and not cleanChart and goLong, "BUY",  style = shape.labelup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, textcolor = chart.fg_color, text = "▲")
+plotshape(showMarkers and not cleanChart and goShort, "SELL", style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, textcolor = chart.fg_color, text = "▼")
 
-alertcondition(entryUp, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
-alertcondition(entryDn, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
+alertcondition(goLong, title = "CanvasV V4 BUY",  message = "CanvasV V4 BUY {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
+alertcondition(goShort, title = "CanvasV V4 SELL", message = "CanvasV V4 SELL {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
 alertcondition(isExitBar, title = "CanvasV V4 EXIT", message = "CanvasV V4 EXIT {{exchange}}:{{ticker}} {{interval}} @ {{close}}")
 
 //--------------------------------------------------------------
@@ -1056,10 +1084,8 @@ else
 //--------------------------------------------------------------
 // Level lines live toggle
 //--------------------------------------------------------------
-var bool prevShowLevels = na
-if na(prevShowLevels)
-    prevShowLevels := showLevels
-else if showLevels != prevShowLevels
+var bool prevShowLevels = showLevels
+if showLevels != prevShowLevels
     prevShowLevels := showLevels
     if not showLevels
         if not na(lnEntry)
